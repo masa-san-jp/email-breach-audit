@@ -1,4 +1,4 @@
-"""SPEC v0.16 §14: acceptance checks through the public injection points."""
+"""SPEC v0.18 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -179,7 +179,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(len(findings), 2)
         self.assertEqual({r['breach']: r['providers'] for r in findings},
                          {'Twitter': 'hibp leakcheck', 'Twitter (200M)': 'hibp'})
-        self.assertIn('2022-01-01（Have I Been Pwned）', self.html())
+        self.assertIn('<span class="date">2022-01-01</span><br>（Have I Been Pwned）', self.html())
 
     def test_a09_risk_categories_and_boundaries(self):
         cases = [
@@ -312,9 +312,9 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn('DO_NOT_PRINT_RESPONSE', self.stderr + self.html())
 
 
-    def test_spec_version_references_are_v016(self):
-        self.assertIn('SPEC.md v0.16', audit.__doc__)
-        self.assertIn('SPEC v0.16', __doc__)
+    def test_spec_version_references_are_current(self):
+        self.assertIn('SPEC.md v0.18', audit.__doc__)
+        self.assertIn('SPEC v0.18', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -535,6 +535,64 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn('data-search', markup)
         self.assertNotIn('data-filter', markup)
 
+    def test_html_print_does_not_force_page_breaks(self):
+        self.assertEqual(self.run_audit(), 0)
+        markup = self.html()
+        import re
+        self.assertIsNone(re.search(r'(?:page-)?break-(?:before|after)\s*:\s*(?:page|always|left|right|recto|verso)', markup))
+        self.assertIn('section.addr{padding:10px;break-inside:avoid}', markup)
+
+    def test_html_pair_tables_use_equal_font_sizes_and_45_percent_labels(self):
+        self.assertEqual(self.run_audit(), 0)
+        markup = self.html()
+        self.assertIn('.overview th{width:45%}', markup)
+        self.assertIn('.overview th,.overview td{font-size:inherit}', markup)
+        self.assertNotIn('font-size:19px', markup)
+        self.assertIn('<h2>調査結果の数字</h2>\n<table class="overview">', markup)
+        self.assertIn('<h2>調査の条件</h2>\n<table class="overview">', markup)
+
+    def test_html_dates_do_not_wrap_and_sources_follow_line_break(self):
+        items = [source(name='Day', date='2025-01-02', precision='day', added='2025-02-03'),
+                 source(name='Month', date='2024-03', precision='month'),
+                 source(name='Year', date='2020', precision='year'), source(name='Undated')]
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3)])
+        self.assertEqual(self.run_audit(options=['--report-only']), 0)
+        markup = self.html()
+        self.assertIn('.date{white-space:nowrap}', markup)
+        for day in ('2025-01-02', '2025-02-03', '2024-03', '2020'):
+            self.assertIn('<span class="date">'+day+'</span><br>（LeakCheck Public API）', markup)
+        self.assertNotIn('不明<br>', markup)
+        self.assertIn('<span class="date">2023-10-10</span> 以降', markup)
+        stamp = audit.local_time(UTC_NOW)
+        self.assertIn('<span class="date">'+stamp[:10]+'</span>'+stamp[10:], markup)
+
+    def test_html_zero_infections_use_single_line_and_positive_use_table(self):
+        self.input.write_text('zero@example.com\none@example.com')
+        seeds = []
+        for email, count in [('zero@example.com', 0), ('one@example.com', 1)]:
+            extra = dict(infections=count, compromised_dates=[], corporate_services=0, user_services=0)
+            seeds += [('hudsonrock', email, 'ok', record(extra=extra), '2026-10-10T03:15:00Z', 3),
+                      ('leakcheck', email, 'ok', record([source(password=False)]), '2026-10-10T03:15:00Z', 3)]
+        self.seed(seeds)
+        self.assertEqual(self.run_audit(options=['--report-only'], providers='leakcheck,hudsonrock'), 0)
+        markup = self.html()
+        zero = next(section for section in markup.split('<section class="addr"') if '低 zero@example.com' in section)
+        one = next(section for section in markup.split('<section class="addr"') if '緊急 one@example.com' in section)
+        self.assertIn('<p>インフォスティーラー: 感染の記録なし（Hudson Rock Cavalier OSINT）</p>', zero)
+        self.assertNotIn('感染の記録の件数', zero)
+        self.assertIn('<h4>インフォスティーラー</h4><table class="overview">', one)
+        self.assertIn('<th scope="row">感染の記録の件数</th><td>1</td>', one)
+        self.assertIn('<th scope="row">最新の感染日</th><td>—</td>', one)
+
+    def test_html_profile_photos_are_translated(self):
+        item = dict(source(password=False), data=['Profile photos', 'profile photos'])
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record([item]), '2026-10-10T03:15:00Z', 3)])
+        self.assertEqual(self.run_audit(options=['--report-only']), 0)
+        markup = self.html()
+        self.assertEqual(markup.count('プロフィール写真'), 2)
+        self.assertNotIn('Profile photos', markup)
+        self.assertIn('profile photos', markup)
+
     def test_a18_run_records_immutable_and_complete(self):
         self.input.write_text('one@example.com\ntwo@example.org')
         self.assertEqual(self.run_audit(providers='hibp,leakcheck'), 0)
@@ -606,7 +664,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(markup.count('感染した端末にあった社内サービスの認証情報の数'),2)
         self.assertIn('個人向けサービスの認証情報の数',markup)
         self.assertIn('2025-01-02',markup)
-        self.assertEqual(markup.count('□ 端末管理者</td><td>このアドレスの利用者が使う端末を調べる（感染の記録 2 件、最新の感染日 2025-01-02）'), 2)
+        self.assertEqual(markup.count('□ 端末管理者</td><td>このアドレスの利用者が使う端末を調べる（感染の記録 2 件、最新の感染日 <span class="date">2025-01-02</span>）'), 2)
         self.assertEqual(markup.count('<h3>即時対応</h3>'), 1)
         self.assertNotIn('<h3>順次対応</h3>', markup)
         self.assertNotIn('<h3>急ぎ不要</h3>', markup)
@@ -753,9 +811,9 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn('今日中', markup)
         self.assertNotIn('営業日', markup)
         self.assertEqual(self.html().count('<div class="request">'), 4)
-        self.assertIn('2025-01-01（LeakCheck Public API）', visible)
-        self.assertIn('2023-10-10 以降または日付不明のものが 1 件ある', visible)
-        self.assertIn('どれも 2023-10-10 より前', visible)
+        self.assertIn('2025-01-01 （LeakCheck Public API）', visible)
+        self.assertIn('2023-10-10  以降または日付不明のものが 1 件ある', visible)
+        self.assertIn('どれも  2023-10-10  より前', visible)
 
     def test_a20_previous_record_comparison_and_new_marks(self):
         self.assertEqual(self.run_audit(lambda *_: reply({'success':True,'sources':[{'name':'Old'}]})), 0)
@@ -785,7 +843,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(finding['added_date'], '')
         self.assertEqual(finding['recent'], 'false')
         self.assertEqual(self.rows()[0]['risk'], 'medium')
-        self.assertIn('2000-01-01（XposedOrNot）', self.html())
+        self.assertIn('<span class="date">2000-01-01</span><br>（XposedOrNot）', self.html())
         with contextlib.closing(sqlite3.connect(self.out/'cache.sqlite')) as db:
             self.assertEqual(db.execute('SELECT schema_version FROM results').fetchone()[0], 3)
 

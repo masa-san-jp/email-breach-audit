@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.16."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.18."""
 import argparse
 import calendar
 import collections
@@ -695,6 +695,7 @@ DATA_LABELS = {'Email addresses': 'メールアドレス',
  'Security questions and answers': '秘密の質問と答え',
  'Auth tokens': '認証トークン',
  'Avatars': 'プロフィール画像',
+ 'Profile photos': 'プロフィール写真',
  'Spoken languages': '使用言語',
  'Education levels': '学歴',
  'Browser user agent details': 'ブラウザの情報',
@@ -757,20 +758,30 @@ def previous_comparison(outdir, current, findings, active):
 
 
 def render_html(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
-    esc = lambda value: html.escape(text_value(value), quote=True)
+    def esc(value):
+        escaped = html.escape(text_value(value), quote=True)
+        return re.sub(r'(?<![0-9])\d{4}-\d{2}-\d{2}(?![0-9])',
+                      lambda match: '<span class="date">'+match[0]+'</span>', escaped)
+
+    def date_cell(value):
+        day, provider = value if isinstance(value, tuple) else (value, '')
+        if not day:
+            return '不明'
+        rendered = '<span class="date">'+html.escape(day, quote=True)+'</span>'
+        return rendered + ('<br>（'+esc(NAMES[provider])+'）' if provider else '')
     states_labels = dict(ok='照会済み', error='エラー', not_queried='未照会', skipped='照会しなかった')
     flag_labels = dict(stealer_log='情報窃取マルウェア由来', spam_list='スパム用リスト', fabricated='作られたデータの疑い（判定に使わない）', unverified='未検証', malware='マルウェア関連')
-    def table(headers, rows):
-        return '<table><thead><tr>' + ''.join('<th scope="col">'+esc(v)+'</th>' for v in headers) + '</tr></thead><tbody>' + ''.join('<tr>'+''.join('<td>'+esc(v)+'</td>' for v in row)+'</tr>' for row in rows) + '</tbody></table>'
+    def table(headers, rows, date_columns=()):
+        return '<table><thead><tr>' + ''.join('<th scope="col">'+esc(v)+'</th>' for v in headers) + '</tr></thead><tbody>' + ''.join('<tr>'+''.join('<td>'+(date_cell(v) if i in date_columns else esc(v))+'</td>' for i,v in enumerate(row))+'</tr>' for row in rows) + '</tbody></table>'
     def pairs(rows):
         return '<table class="overview"><tbody>'+''.join('<tr><th scope="row">'+esc(k)+'</th><td>'+esc(v)+'</td></tr>' for k,v in rows)+'</tbody></table>'
     counts = collections.Counter(r['risk'] for r in summaries)
     partial = sum(r['coverage'] == 'partial' for r in summaries)
     parts = ['<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>メールアドレス流出調査レポート</title>',
     '''<style>
-:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:32%}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.request{border:1px solid var(--line);padding:16px;white-space:pre-wrap}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-size:19px;font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
+:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:45%}.overview th,.overview td{font-size:inherit}.date{white-space:nowrap}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.request{border:1px solid var(--line);padding:16px;white-space:pre-wrap}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
 @media(prefers-color-scheme:dark){:root{--bg:#171d25;--paper:#202935;--ink:#e5ebf2;--line:#526070;--muted:#2d3948;--accent:#84bcec}section.addr h3{color:var(--ink)}}
-@page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}section.addr{padding:10px;break-inside:avoid}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3{break-after:avoid}section.addr h3{color:black}a{color:black}table{width:100%}}
+@page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}section.addr{padding:10px;break-inside:avoid}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3,h2+p{break-after:avoid}section.addr h3{color:black}a{color:black}table{width:100%}}
 </style></head><body><main>''', '<h1>メールアドレス流出調査レポート</h1>']
     change, new_pairs = comparison or ('前回の記録なし（初回）', set())
     classifications = {'critical': '即時対応', 'high': '即時対応', 'medium': '順次対応', 'unknown': '順次対応', 'low': '急ぎ不要', 'none': '対応不要'}
@@ -816,7 +827,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         ('前回からの変化', change)]),
         table(['区分','件数','意味','対応の分類'], [[label,counts[risk],RISK_WORDS[risk][0],classifications[risk]] for risk,label in RISKS.items()]),
         ''.join('<p>'+esc(label+': '+reason)+'</p>' for label, reason in classification_reasons),
-        '<h2>流出元ごとの影響</h2>', table(['流出元','流出日','漏れた情報','パスワード','該当アドレス数','該当アドレス'], [item[-1] for item in sorted(impacts, key=lambda item: item[:4])])]
+        '<h2>流出元ごとの影響</h2>', table(['流出元','流出日','漏れた情報','パスワード','該当アドレス数','該当アドレス'], [item[-1] for item in sorted(impacts, key=lambda item: item[:4])], date_columns=(1,))]
     provider_rows=[]
     for provider in args.providers:
         used=[cache.usable(provider,r['email']) for r in summaries] if provider in active else []
@@ -874,10 +885,12 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
             if f['catalog_miss']: caution.append('照会先の一覧に詳細なし')
             password='含む' if f['has_password'] is True else '含まない' if f['has_password'] is False else '含む可能性あり' if f['has_password']=='maybe' else '不明（含むとして扱う）'
             rows.append([f['breach']+(' 新規' if (r['email'], f['breach']) in new_pairs else ''),
-                         (f['breach_date']+'（'+NAMES[f['breach_date_source']]+'）') if f['breach_date'] else '不明',
-                         (f['added_date']+'（'+NAMES[f['added_date_source']]+'）') if f['added_date'] else '不明',('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
-        if rows: parts.append(table(['流出元','流出日（出どころ）','公開日（出どころ）','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows))
-        if states.get('hudsonrock')=='ok':
+                         (f['breach_date'], f['breach_date_source']),
+                         (f['added_date'], f['added_date_source']),('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
+        if rows: parts.append(table(['流出元','流出日（出どころ）','公開日（出どころ）','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows,date_columns=(1,2)))
+        if states.get('hudsonrock')=='ok' and extra['infections']==0:
+            parts.append('<p>'+esc('インフォスティーラー: 感染の記録なし（'+NAMES['hudsonrock']+'）')+'</p>')
+        elif states.get('hudsonrock')=='ok':
             parts.append('<h4>インフォスティーラー</h4>'+pairs([('感染の記録の件数',extra['infections']),('最新の感染日',(extra['compromised_dates'] or ['—'])[-1]),('感染した端末にあった社内サービスの認証情報の数',extra['corporate_services']),('個人向けサービスの認証情報の数',extra['user_services'])]))
         parts.append('<p>'+esc('／'.join(NAMES[p]+': '+states_labels[states[p]] for p in args.providers))+'</p>')
         parts.append('</section>')
