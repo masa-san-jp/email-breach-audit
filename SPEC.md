@@ -5,7 +5,7 @@
 | 版 | v0.10（Draft） |
 | リポジトリ | https://github.com/masa-san-jp/email-breach-audit （公開） |
 | 作成日 | 2026-10-10 |
-| 状態 | レビュー待ち |
+| 状態 | 承認済み（2026-10-10） |
 
 ## 0. この文書の位置づけ（SSOT）
 
