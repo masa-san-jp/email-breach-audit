@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.22."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.23."""
 import argparse
 import calendar
 import collections
@@ -670,9 +670,12 @@ def csv_text(columns, rows):
 
 
 def local_time(value):
-    local = value.astimezone()
-    offset = local.strftime('%z')
-    return local.strftime('%Y-%m-%d %H:%M') + f' (UTC{offset[:3]}:{offset[3:]})'
+    return value.astimezone().strftime('%Y年%m月%d日 %H:%M')
+
+
+def jp_date(value):
+    parts = value.split('-')
+    return ''.join(part + unit for part, unit in zip(parts, ('年', '月', '日')))
 
 
 DATA_LABELS = {'Email addresses': 'メールアドレス',
@@ -695,6 +698,8 @@ DATA_LABELS = {'Email addresses': 'メールアドレス',
  'Security questions and answers': '秘密の質問と答え',
  'Auth tokens': '認証トークン',
  'Avatars': 'プロフィール画像',
+ 'Password hints': 'パスワードのヒント',
+ 'Display names': '表示名',
  'Profile photos': 'プロフィール写真',
  'Spoken languages': '使用言語',
  'Education levels': '学歴',
@@ -791,15 +796,16 @@ ORDER_NOTE = '並び順: パスワードを含むもの（可能性を含む）�
 def render_html(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
     def esc(value):
         escaped = html.escape(text_value(value), quote=True)
-        return re.sub(r'(?<![0-9])\d{4}-\d{2}-\d{2}(?![0-9])',
-                      lambda match: '<span class="date">'+match[0]+'</span>', escaped)
+        escaped = re.sub(r'(?<![0-9])(\d{4})-(\d{2})-(\d{2})(?![0-9])', r'\1年\2月\3日', escaped)
+        return re.sub(r'(?<![0-9])\d{4}年\d{2}月\d{2}日', lambda match: '<span class="date">'+match[0]+'</span>', escaped)
 
     def date_cell(value):
         day, provider = value if isinstance(value, tuple) else (value, '')
         if not day:
             return '不明'
-        rendered = '<span class="date">'+html.escape(day, quote=True)+'</span>'
-        return rendered + ('<br>（'+esc(NAMES[provider])+'）' if provider else '')
+        if day == '不明':
+            return '不明'
+        return '<span class="date">'+html.escape(jp_date(day), quote=True)+'</span>'
     states_labels = dict(ok='照会済み', error='エラー', not_queried='未照会', skipped='照会しなかった')
     flag_labels = dict(stealer_log='情報窃取マルウェア由来', spam_list='スパム用リスト', fabricated='作られたデータの疑い（判定に使わない）', unverified='未検証', malware='マルウェア関連')
     def table(headers, rows, date_columns=()):
@@ -926,7 +932,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
                          (f['breach_date'], f['breach_date_source']),
                          (f['added_date'], f['added_date_source']),('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
         if rows: parts.append('<p>'+esc(ORDER_NOTE)+'</p>')
-        if rows: parts.append(table(['流出元','流出日（出どころ）','公開日（出どころ）','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows,date_columns=(1,2)))
+        if rows: parts.append(table(['流出元','流出日','公開日','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows,date_columns=(1,2)))
         if states.get('hudsonrock')=='ok' and extra['infections']==0:
             parts.append('<p>'+esc('インフォスティーラー: 感染の記録なし（'+NAMES['hudsonrock']+'）')+'</p>')
         elif states.get('hudsonrock')=='ok':

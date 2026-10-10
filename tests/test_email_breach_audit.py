@@ -1,4 +1,4 @@
-"""SPEC v0.22 §14: acceptance checks through the public injection points."""
+"""SPEC v0.23 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -179,7 +179,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(len(findings), 2)
         self.assertEqual({r['breach']: r['providers'] for r in findings},
                          {'Twitter': 'hibp leakcheck', 'Twitter (200M)': 'hibp'})
-        self.assertIn('<span class="date">2022-01-01</span><br>（Have I Been Pwned）', self.html())
+        self.assertIn('<td><span class="date">2022年01月01日</span></td>', self.html())
 
     def test_a09_risk_categories_and_boundaries(self):
         cases = [
@@ -313,8 +313,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.22', audit.__doc__)
-        self.assertIn('SPEC v0.22', __doc__)
+        self.assertIn('SPEC.md v0.23', audit.__doc__)
+        self.assertIn('SPEC v0.23', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -555,7 +555,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIn('<h2>調査結果の数字</h2>\n<table class="overview">', markup)
         self.assertIn('<h2>調査の条件</h2>\n<table class="overview">', markup)
 
-    def test_html_dates_do_not_wrap_and_sources_follow_line_break(self):
+    def test_html_dates_japanese_without_sources(self):
         items = [source(name='Day', date='2025-01-02', precision='day', added='2025-02-03'),
                  source(name='Month', date='2024-03', precision='month'),
                  source(name='Year', date='2020', precision='year'), source(name='Undated')]
@@ -563,12 +563,15 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
         markup = self.html()
         self.assertIn('.date{white-space:nowrap}', markup)
-        for day in ('2025-01-02', '2025-02-03', '2024-03', '2020'):
-            self.assertIn('<span class="date">'+day+'</span><br>（LeakCheck Public API）', markup)
-        self.assertNotIn('不明<br>', markup)
-        self.assertIn('<span class="date">2023-10-10</span> 以降', markup)
+        for day in ('2025年01月02日', '2025年02月03日', '2024年03月', '2020年'):
+            self.assertIn('<td><span class="date">'+day+'</span></td>', markup)
+        self.assertNotIn('<br>（', markup)
+        self.assertNotIn('出どころ', markup)
+        self.assertIn('<span class="date">2023年10月10日</span> 以降', markup)
         stamp = audit.local_time(UTC_NOW)
-        self.assertIn('<span class="date">'+stamp[:10]+'</span>'+stamp[10:], markup)
+        self.assertRegex(stamp, r'^\d{4}年\d{2}月\d{2}日 \d{2}:\d{2}$')
+        self.assertIn('<span class="date">'+stamp[:11]+'</span>'+stamp[11:], markup)
+        self.assertNotIn('UTC', markup)
 
     def test_html_zero_infections_use_single_line_and_positive_use_table(self):
         self.input.write_text('zero@example.com\none@example.com')
@@ -667,8 +670,8 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(markup.count('感染の記録の件数'),2)
         self.assertEqual(markup.count('感染した端末にあった社内サービスの認証情報の数'),2)
         self.assertIn('個人向けサービスの認証情報の数',markup)
-        self.assertIn('2025-01-02',markup)
-        self.assertEqual(markup.count('□ 端末管理者</td><td>本人が使う端末の感染の有無を調べる（感染の記録 2 件、最新の感染日 <span class="date">2025-01-02</span>）'), 2)
+        self.assertIn('2025年01月02日',markup)
+        self.assertEqual(markup.count('□ 端末管理者</td><td>本人が使う端末の感染の有無を調べる（感染の記録 2 件、最新の感染日 <span class="date">2025年01月02日</span>）'), 2)
         self.assertEqual(markup.count('□ 端末管理者が指定した別の端末で、Example のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない'), 1)
         infection_section = markup.split('<h3>緊急 infection@example.com</h3>', 1)[1].split('</section>', 1)[0]
         self.assertNotIn(' のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない', infection_section)
@@ -850,8 +853,8 @@ class AcceptanceTests(unittest.TestCase):
             ['急ぎ不要のアドレス','1 件'],
             ['前回からの変化','前回の記録なし（初回）']])
         self.assertEqual(parser.tables[2][1:], [
-            ['Shared','2025-01-01','不明','含む','2','high@example.com、low@example.com'],
-            ['Old','2000','不明','含む','1','medium@example.com'],
+            ['Shared','2025年01月01日','不明','含む','2','high@example.com、low@example.com'],
+            ['Old','2000年','不明','含む','1','medium@example.com'],
             ['Stealer','不明','不明','含まない','1','critical@example.com']])
         sections = [' '.join(section) for section in parser.sections]
         self.assertEqual([section.split()[0] for section in sections], ['緊急','高','中','判定不能','低'])
@@ -936,9 +939,10 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn('本人に送る文面', markup)
         self.assertNotIn('今日中', markup)
         self.assertNotIn('営業日', markup)
-        self.assertIn('2025-01-01 （LeakCheck Public API）', visible)
-        self.assertIn('2023-10-10  以降または日付不明のものが 1 件ある', visible)
-        self.assertIn('どれも  2023-10-10  より前', visible)
+        self.assertIn('2025年01月01日', visible)
+        self.assertNotIn('（LeakCheck Public API）', visible)
+        self.assertIn('2023年10月10日  以降または日付不明のものが 1 件ある', visible)
+        self.assertIn('どれも  2023年10月10日  より前', visible)
 
     def test_a20_previous_record_comparison_and_new_marks(self):
         self.assertEqual(self.run_audit(lambda *_: reply({'success':True,'sources':[{'name':'Old'}]})), 0)
@@ -968,7 +972,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(finding['added_date'], '')
         self.assertEqual(finding['recent'], 'false')
         self.assertEqual(self.rows()[0]['risk'], 'medium')
-        self.assertIn('<span class="date">2000-01-01</span><br>（XposedOrNot）', self.html())
+        self.assertIn('<td><span class="date">2000年01月01日</span></td>', self.html())
         with contextlib.closing(sqlite3.connect(self.out/'cache.sqlite')) as db:
             self.assertEqual(db.execute('SELECT schema_version FROM results').fetchone()[0], 3)
 
