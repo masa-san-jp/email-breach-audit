@@ -1,4 +1,4 @@
-"""SPEC v0.25 §14: acceptance checks through the public injection points."""
+"""SPEC v0.26 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -242,12 +242,12 @@ class AcceptanceTests(unittest.TestCase):
             elif item == 'infection':
                 provider = 'hudsonrock'
                 data = record(extra={'infections': 1, 'compromised_dates': [], 'corporate_services': 0, 'user_services': 0})
-            seeds.append((provider, f'case{i}@example.com', status, data, '2026-10-10T03:15:00Z', 3))
+            seeds.append((provider, f'case{i}@example.com', status, data, '2026-10-10T03:15:00Z', 4))
         for i in range(len(cases)-1):
             seeds.append(('hudsonrock', f'case{i}@example.com', 'ok',
                           record(extra={'infections': 0, 'compromised_dates': [],
                                         'corporate_services': 0, 'user_services': 0}),
-                          '2026-10-10T03:15:00Z', 3))
+                          '2026-10-10T03:15:00Z', 4))
         self.seed(seeds)
         self.assertEqual(self.run_audit(options=['--report-only'], providers='leakcheck,hudsonrock'), 3)
         self.assertEqual([r['risk'] for r in self.rows()], [risk for risk, _ in cases])
@@ -265,7 +265,7 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_a11_report_only_uses_expired_not_other_schema(self):
         self.input.write_text('old@example.com\nversion@example.com\n')
-        self.seed([('leakcheck', 'old@example.com', 'ok', record([source(password=False)]), '2020-01-01T00:00:00Z', 3),
+        self.seed([('leakcheck', 'old@example.com', 'ok', record([source(password=False)]), '2020-01-01T00:00:00Z', 4),
                    ('leakcheck', 'version@example.com', 'ok', record([source(password=True)]), '2026-10-10T00:00:00Z', 2)])
         self.assertEqual(self.run_audit(options=['--report-only', '--max-age', '1']), 3)
         self.assertEqual([(r['risk'], r['providers_ok'], r['providers_not_queried']) for r in self.rows()],
@@ -365,8 +365,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.25', audit.__doc__)
-        self.assertIn('SPEC v0.25', __doc__)
+        self.assertIn('SPEC.md v0.26', audit.__doc__)
+        self.assertIn('SPEC v0.26', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -485,7 +485,7 @@ class AcceptanceTests(unittest.TestCase):
             mutations.append(dict(data=json.dumps(record([dict(source(), **{field: value})]))))
         addresses = [f'bad{i}@example.com' for i in range(len(mutations))]
         self.input.write_text('\n'.join(addresses + ['good@example.com']))
-        self.seed([('leakcheck', email, 'ok', record(), '2026-10-10T03:15:00Z', 3) for email in addresses + ['good@example.com']])
+        self.seed([('leakcheck', email, 'ok', record(), '2026-10-10T03:15:00Z', 4) for email in addresses + ['good@example.com']])
         with contextlib.closing(sqlite3.connect(self.out / 'cache.sqlite')) as db:
             for email, mutation in zip(addresses, mutations):
                 for field, value in mutation.items():
@@ -543,7 +543,7 @@ class AcceptanceTests(unittest.TestCase):
         seeds = []
         for i, item in enumerate(items):
             if i == 5:
-                seeds.append(('leakcheck', addresses[i], 'error', {'kind':'invalid','reason':'HTTP 400'}, '2026-10-10T03:15:00Z', 3))
+                seeds.append(('leakcheck', addresses[i], 'error', {'kind':'invalid','reason':'HTTP 400'}, '2026-10-10T03:15:00Z', 4))
                 continue
             if i == 7:
                 continue
@@ -552,7 +552,7 @@ class AcceptanceTests(unittest.TestCase):
                 sources.append(source(name='Unknown password', date='2025-01-01', precision='day'))
             if i == 0:
                 sources.append(source(name='Stealer', password=False, flags=['stealer_log']))
-            seeds.append(('leakcheck', addresses[i], 'ok', record(sources, {'fields':['password'] if i == 6 else [], 'password_field':i == 6}), '2026-10-10T03:15:00Z', 3))
+            seeds.append(('leakcheck', addresses[i], 'ok', record(sources, {'fields':['password'] if i == 6 else [], 'password_field':i == 6}), '2026-10-10T03:15:00Z', 4))
         self.seed(seeds)
         self.assertEqual(self.run_audit(options=['--report-only'], providers='hibp,leakcheck'), 3)
         markup = self.markdown()
@@ -596,7 +596,7 @@ class AcceptanceTests(unittest.TestCase):
         items = [source(name='Day', date='2025-01-02', precision='day', added='2025-02-03'),
                  source(name='Month', date='2024-03', precision='month'),
                  source(name='Year', date='2020', precision='year'), source(name='Undated')]
-        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3)])
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 4)])
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
         markup = self.markdown()
         for day in ('2025年01月02日', '2025年02月03日', '2024年03月', '2020年'):
@@ -614,8 +614,8 @@ class AcceptanceTests(unittest.TestCase):
         seeds = []
         for email, count in [('zero@example.com', 0), ('one@example.com', 1)]:
             extra = dict(infections=count, compromised_dates=[], corporate_services=0, user_services=0)
-            seeds += [('hudsonrock', email, 'ok', record(extra=extra), '2026-10-10T03:15:00Z', 3),
-                      ('leakcheck', email, 'ok', record([source(password=False)]), '2026-10-10T03:15:00Z', 3)]
+            seeds += [('hudsonrock', email, 'ok', record(extra=extra), '2026-10-10T03:15:00Z', 4),
+                      ('leakcheck', email, 'ok', record([source(password=False)]), '2026-10-10T03:15:00Z', 4)]
         self.seed(seeds)
         self.assertEqual(self.run_audit(options=['--report-only'], providers='leakcheck,hudsonrock'), 0)
         markup = self.markdown()
@@ -629,7 +629,7 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_markdown_profile_photos_are_translated(self):
         item = dict(source(password=False), data=['Profile photos', 'profile photos'])
-        self.seed([('leakcheck', 'taro@example.com', 'ok', record([item]), '2026-10-10T03:15:00Z', 3)])
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record([item]), '2026-10-10T03:15:00Z', 4)])
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
         markup = self.markdown()
         self.assertEqual(markup.count('プロフィール写真'), 2)
@@ -675,7 +675,7 @@ class AcceptanceTests(unittest.TestCase):
     def test_run_record_errors_missing_and_retained_success(self):
         self.input.write_text('old@example.com\nerror@example.com\nmissing@example.com')
         old = record([source(password=False)])
-        self.seed([('leakcheck','old@example.com','ok',old,'2020-01-01T00:00:00Z',3)])
+        self.seed([('leakcheck','old@example.com','ok',old,'2020-01-01T00:00:00Z',4)])
         def http(url, *_):
             if 'old%40' in url: return reply({}, 503)
             if 'error%40' in url: return reply({}, 400)
@@ -696,10 +696,10 @@ class AcceptanceTests(unittest.TestCase):
     def test_markdown_infection_table_and_critical_reasons(self):
         self.input.write_text('both@example.com\ninfection@example.com')
         infected = {'infections':2,'compromised_dates':['2025-01-02'],'corporate_services':3,'user_services':4}
-        self.seed([('hudsonrock',email,'ok',record(extra=infected),'2026-10-10T03:15:00Z',3)
+        self.seed([('hudsonrock',email,'ok',record(extra=infected),'2026-10-10T03:15:00Z',4)
                    for email in ('both@example.com','infection@example.com')] +
-                  [('leakcheck','both@example.com','ok',record([source(flags=['stealer_log'])]),'2026-10-10T03:15:00Z',3),
-                   ('leakcheck','infection@example.com','ok',record(),'2026-10-10T03:15:00Z',3)])
+                  [('leakcheck','both@example.com','ok',record([source(flags=['stealer_log'])]),'2026-10-10T03:15:00Z',4),
+                   ('leakcheck','infection@example.com','ok',record(),'2026-10-10T03:15:00Z',4)])
         self.assertEqual(self.run_audit(options=['--report-only'],providers='leakcheck,hudsonrock'),0)
         markup=self.markdown()
         self.assertIn('インフォスティーラーの感染記録が 2 件ある。情報窃取マルウェア由来の流出元が 1 件ある',markup)
@@ -722,8 +722,8 @@ class AcceptanceTests(unittest.TestCase):
         items = [source(name='NoPass', date='2026-01-01', precision='day', password=False),
                  source(name='=Old', date='2012-05', precision='month', password=True),
                  source(name='Undated', password=None)]
-        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3),
-                   ('leakcheck', 'none@example.org', 'ok', record(), '2026-10-10T03:15:00Z', 3)])
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 4),
+                   ('leakcheck', 'none@example.org', 'ok', record(), '2026-10-10T03:15:00Z', 4)])
         self.assertEqual(self.run_audit(), 0)
         path = self.out / 'history.csv'
         first = path.read_bytes()
@@ -829,7 +829,7 @@ class AcceptanceTests(unittest.TestCase):
                  source(name='PassOld', date='2012-05-01', precision='day', password=True),
                  source(name='PassUndated', password=True),
                  source(name='PassNew', date='2019-01-01', precision='day', password=True)]
-        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3)])
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 4)])
         self.run_audit(options=['--report-only'])
         markup = self.markdown()
         expected = ['PassNew', 'PassOld', 'PassUndated', 'NoPassNew']
@@ -856,7 +856,7 @@ class AcceptanceTests(unittest.TestCase):
         for email, item in zip(addresses, items):
             status = 'error' if item == 'error' else 'ok'
             value = {'kind':'invalid','reason':'HTTP 400'} if status == 'error' else record([item] if item else [])
-            seeds.append(('leakcheck', email, status, value, '2026-10-10T03:15:00Z', 3))
+            seeds.append(('leakcheck', email, status, value, '2026-10-10T03:15:00Z', 4))
         self.seed(seeds)
         self.assertEqual(self.run_audit(options=['--report-only']), 3)
         parser = MarkdownReport(self.markdown())
@@ -990,7 +990,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(self.rows()[0]['risk'], 'medium')
         self.assertIn('| '+'2000年01月01日'+' |', self.markdown())
         with contextlib.closing(sqlite3.connect(self.out/'cache.sqlite')) as db:
-            self.assertEqual(db.execute('SELECT schema_version FROM results').fetchone()[0], 3)
+            self.assertEqual(db.execute('SELECT schema_version FROM results').fetchone()[0], 4)
 
     def test_a06_remaining_rate_limit_rules(self):
         cases = [

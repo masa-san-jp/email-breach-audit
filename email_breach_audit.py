@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.25."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.26."""
 import argparse
 import calendar
 import collections
@@ -21,9 +21,9 @@ import urllib.parse
 import urllib.request
 
 __version__ = '0.1.0'
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 PROVIDERS = ('hibp', 'leakcheck', 'hudsonrock', 'xon')
-FLAGS = ('stealer_log', 'spam_list', 'fabricated', 'unverified', 'malware')
+FLAGS = ('stealer_log', 'spam_list', 'fabricated', 'unverified', 'malware', 'no_service')
 def format_duration(seconds: float) -> str:
     if seconds < 60:
         return f'{seconds:.1f} 秒'
@@ -293,6 +293,9 @@ def normalize(provider, payload, catalog):
                     ('IsStealerLog', 'stealer_log', True), ('IsSpamList', 'spam_list', True),
                     ('IsFabricated', 'fabricated', True), ('IsVerified', 'unverified', False),
                     ('IsMalware', 'malware', True)) if item.get(key) is expected]
+                domain = item.get('Domain')
+                if isinstance(domain, str) and not domain.strip():
+                    flags.append('no_service')
             else:
                 display = name
                 date, precision = date_value(item.get('breachedDate'), 'iso')
@@ -742,13 +745,16 @@ ORGANIZATION_ACTIONS = [('緊急', '対応責任者', '本人に連絡し、下�
 PERSON_ACTIONS = [('緊急', '端末管理者の調査が終わるまで、その端末でパスワードと認証コードを入力しない', '端末管理者から調査の終了を知らされた'),
  ('緊急', '端末管理者が指定した別の端末で、会社アカウントのパスワードを変更する', '変更した'),
  ('緊急', '端末管理者が指定した別の端末で、<サービス名> のパスワードを変更する', '変更した、またはそのサービスを使っていない'),
+ ('緊急', '端末管理者が指定した別の端末で、使っているすべてのサービスのパスワードを、それぞれ違うものに変更する（<一覧の名前> は特定のサービスではない一覧のため）', 'すべて変更した'),
  ('緊急', '終わったことをセキュリティ管理者に報告する（パスワードは書かない）', '報告した'),
  ('高・中', '<サービス名> のパスワードを変更する', '変更した、またはそのサービスを使っていない'),
  ('高・中', '上のサービスと同じ・似たパスワードを使っているほかのサービスのパスワードを、すべて変更する', '該当するサービスがない、またはすべて変更した'),
+ ('高・中', '使っているすべてのサービスのパスワードを、それぞれ違うものに変更する（<一覧の名前> は特定のサービスではない一覧で、どのサービスのパスワードが漏れたかわからないため）', 'すべて変更した'),
  ('高・中', '会社アカウントのパスワードを、ほかのどのサービスとも違うものに変更する', '変更した'),
  ('高・中', 'パスワードを変更したサービスのうち、多要素認証を使えるものすべてで、多要素認証を有効にする', '有効にした'),
  ('高・中', '終わったことと、会社アカウントで同じ・似たパスワードを使っていたかを、セキュリティ管理者に報告する（パスワードは書かない）', '報告した'),
  ('低', '<対象サービスを `、` でつなぐ> や会社を名乗るメールのリンクから、パスワードを入力しない', '—（続けて守る）'),
+ ('低', '各種サービスや会社を名乗るメールのリンクから、パスワードを入力しない', '—（続けて守る）'),
  ('低', '不審なメールを受け取ったら、開かずにセキュリティ窓口へ転送する', '—（続けて守る）')]
 
 def previous_comparison(outdir, current, findings, active):
@@ -803,7 +809,7 @@ def render_markdown(args, summaries, details, active, cache, notes, current, cut
         day = value[0] if isinstance(value, tuple) else value
         return esc(jp_date(day)) if day and day != '不明' else '不明'
     states_labels = dict(ok='照会済み', error='エラー', not_queried='未照会', skipped='照会しなかった')
-    flag_labels = dict(stealer_log='情報窃取マルウェア由来', spam_list='スパム用リスト', fabricated='作られたデータの疑い（判定に使わない）', unverified='未検証', malware='マルウェア関連')
+    flag_labels = dict(stealer_log='情報窃取マルウェア由来', spam_list='スパム用リスト', fabricated='作られたデータの疑い（判定に使わない）', unverified='未検証', malware='マルウェア関連', no_service='特定のサービスではない一覧')
     def table(headers, rows, date_columns=()):
         def row(values):
             return '| ' + ' | '.join(values) + ' |'
@@ -892,8 +898,11 @@ def render_markdown(args, summaries, details, active, cache, notes, current, cut
         if any((r['email'], f['breach']) in new_pairs for f in findings):
             parts[-1] = parts[-1].replace("\n\n", "（新規）\n\n", 1)
         findings = sorted(findings, key=report_order)
-        services = [f['breach'] for f in findings
-                    if risk == 'low' or f['in_scope'] and f['has_password'] is not False]
+        def no_service(f):
+            return 'no_service' in f['flags'].split('; ')
+        services = [f['breach'] for f in findings if not no_service(f) and
+                    (risk == 'low' or f['in_scope'] and f['has_password'] is not False)]
+        lists = [f['breach'] for f in findings if no_service(f) and f['in_scope'] and f['has_password'] is not False]
         unavailable = '、'.join(NAMES[p] for p in args.providers if states[p] != 'ok')
 
         def action_text(value):
@@ -912,6 +921,15 @@ def render_markdown(args, summaries, details, active, cache, notes, current, cut
             person_rows = []
             for category, action, condition in PERSON_ACTIONS:
                 if RISKS[risk] not in category.split('・'):
+                    continue
+                if '<一覧の名前>' in action:
+                    if lists: person_rows.append(('□ '+action.replace('<一覧の名前>', '、'.join(lists)), condition))
+                    continue
+                if action.startswith('上のサービスと同じ') and lists:
+                    continue
+                if '<対象サービスを' in action and not services:
+                    continue
+                if action.startswith('各種サービスや会社を名乗る') and services:
                     continue
                 if '<サービス名>' in action:
                     person_rows.extend(('□ '+action.replace('<サービス名>', service), condition) for service in services)
