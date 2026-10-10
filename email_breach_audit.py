@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.19."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.21."""
 import argparse
 import calendar
 import collections
@@ -924,7 +924,7 @@ def utc_text(value):
 
 
 HISTORY = ['実行日時', '実行ID', '実行の種類', 'アドレス', '区分', '対応の分類',
-           '流出元', '流出日', 'パスワード', '検出した照会先', '照会した照会先']
+           '流出元', '流出日', '漏れた情報', 'パスワード', '検出した照会先', '照会した照会先']
 CLASSIFICATIONS = {'critical': '即時対応', 'high': '即時対応', 'medium': '順次対応',
                    'unknown': '順次対応', 'low': '急ぎ不要', 'none': '対応不要'}
 
@@ -949,6 +949,7 @@ def history_rows(args, summaries, details, current, run_id):
                       RISKS[summary['risk']], CLASSIFICATIONS[summary['risk']],
                       finding['breach'] if finding else '（なし）',
                       (finding['breach_date'] or '不明') if finding else '',
+                      ('、'.join(DATA_LABELS.get(v, v) for v in finding['data_classes'].split('; ') if v) or '不明') if finding else '',
                       password_label(finding['has_password']) if finding else '',
                       '、'.join(NAMES[p] for p in finding['providers'].split()) if finding else '',
                       '、'.join(NAMES[p] for p in args.providers if states[p] == 'ok')]

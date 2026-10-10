@@ -1,4 +1,4 @@
-"""SPEC v0.20 §14: acceptance checks through the public injection points."""
+"""SPEC v0.21 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -313,8 +313,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.19', audit.__doc__)
-        self.assertIn('SPEC v0.20', __doc__)
+        self.assertIn('SPEC.md v0.21', audit.__doc__)
+        self.assertIn('SPEC v0.21', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -686,7 +686,7 @@ class AcceptanceTests(unittest.TestCase):
         path = self.out / 'history.csv'
         first = path.read_bytes()
         header = ['実行日時', '実行ID', '実行の種類', 'アドレス', '区分', '対応の分類',
-                  '流出元', '流出日', 'パスワード', '検出した照会先', '照会した照会先']
+                  '流出元', '流出日', '漏れた情報', 'パスワード', '検出した照会先', '照会した照会先']
         with path.open(encoding='utf-8-sig', newline='') as stream:
             self.assertEqual(next(csv.reader(stream)), header)
         rows = self.rows('history.csv')
@@ -695,11 +695,11 @@ class AcceptanceTests(unittest.TestCase):
                   'taro@example.com', '高', '即時対応']
         provider = audit.NAMES['leakcheck']
         self.assertEqual([list(r.values()) for r in rows], [
-            prefix + ["'=Old", '2012-05', '含む', provider, provider],
-            prefix + ['Undated', '不明', '不明（含むとして扱う）', provider, provider],
-            prefix + ['NoPass', '2026-01-01', '含まない', provider, provider],
+            prefix + ["'=Old", '2012-05', '不明', '含む', provider, provider],
+            prefix + ['Undated', '不明', '不明', '不明（含むとして扱う）', provider, provider],
+            prefix + ['NoPass', '2026-01-01', '不明', '含まない', provider, provider],
             [prefix[0], run_id, '通常', 'none@example.org', '検出なし', '対応不要',
-             '（なし）', '', '', '', provider]])
+             '（なし）', '', '', '', '', provider]])
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
         data = path.read_bytes()
         self.assertTrue(data.startswith(first))
