@@ -1,4 +1,4 @@
-"""SPEC v0.27 §14: acceptance checks through the public injection points."""
+"""SPEC v0.28 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -386,8 +386,23 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.27', audit.__doc__)
-        self.assertIn('SPEC v0.27', __doc__)
+        self.assertIn('SPEC.md v0.28', audit.__doc__)
+        self.assertIn('SPEC v0.28', __doc__)
+
+    def test_review_fixes_dates_in_names_none_section_and_guard(self):
+        self.input.write_text('taro@example.com')
+        items = [source(name='Combo 2024-01-15', date='2024-01-15', precision='day', password=True),
+                 source(name='=Sum', date='2020-01-01', precision='day', password=False)]
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 4)])
+        self.run_audit(options=['--report-only'])
+        report = self.markdown()
+        self.assertIn('Combo 2024-01-15', report)
+        self.assertIn('| Combo 2024-01-15 | 2024年01月15日 |', report)
+        self.assertIn('## 検出なしのアドレス\n\nなし\n', report)
+        self.assertNotIn('照会していない照会先に流出が載っている可能性は残る', report)
+        self.assertNotIn('### 区分の決め方', report)
+        self.run_audit(options=['--report-only'])
+        self.assertIn('新しい流出元の組み合わせ 0 件、見つからなくなった組み合わせ 0 件', self.markdown())
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')

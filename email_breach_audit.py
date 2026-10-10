@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.27."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.28."""
 import argparse
 import calendar
 import collections
@@ -33,7 +33,7 @@ def format_duration(seconds: float) -> str:
 RISKS = dict(critical='緊急', high='高', medium='中', low='低', none='検出なし', unknown='判定不能')
 NAMES = dict(hibp='Have I Been Pwned', leakcheck='LeakCheck Public API',
              hudsonrock='Hudson Rock Cavalier OSINT', xon='XposedOrNot')
-CONFIRMATION = dict(hibp='文書（カタログは実測）', leakcheck='実測',
+CONFIRMATION = dict(hibp='実測', leakcheck='実測',
                     hudsonrock='応答は実測。規約とレート制限は未確認', xon='実測')
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+'-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 CATALOGS = dict(hibp='https://haveibeenpwned.com/api/v3/breaches',
@@ -775,7 +775,9 @@ def previous_comparison(outdir, current, findings, active):
             reader = csv.DictReader(stream)
             if not {'email', 'breach'}.issubset(reader.fieldnames or []):
                 raise ValueError('missing columns')
-            old = {(row['email'], row['breach']) for row in reader}
+            def unguard(value):
+                return value[1:] if value[:1] == "'" and value[1:2] in ('=', '+', '-', '@', '\t', '\r') else value
+            old = {(unguard(row['email']), unguard(row['breach'])) for row in reader}
     except (OSError, UnicodeError, ValueError, csv.Error, KeyError):
         return '前回の記録なし（初回）', set()
     metadata = {}
@@ -802,7 +804,6 @@ ORDER_NOTE = '並び順: パスワードを含むもの（可能性を含む）�
 def render_markdown(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
     def esc(value):
         text = text_value(value)
-        text = re.sub(r'(?<![0-9])(\d{4})-(\d{2})-(\d{2})(?![0-9])', r'\1年\2月\3日', text)
         text = re.sub(r'\r\n|\r|\n', ' ', text)
         return re.sub(r'([\\|*_`\[\]<>#])', r'\\\1', text)
 
@@ -844,8 +845,7 @@ def render_markdown(args, summaries, details, active, cache, notes, current, cut
     impacts = []
     for name, items in groups.items():
         values = [f['has_password'] for f in items]
-        password = True if True in values else False if False in values else 'maybe' if 'maybe' in values else None
-        if True not in values and 'maybe' in values: password = 'maybe'
+        password = True if True in values else 'maybe' if 'maybe' in values else None if None in values else False
         addresses = list(dict.fromkeys(f['email'] for f in items))
         day = compare_date(items[0]['breach_date'], items[0]['breach_date_precision'])
         label = name + (' 新規' if any((f['email'], name) in new_pairs for f in items) else '')
@@ -892,7 +892,7 @@ def render_markdown(args, summaries, details, active, cache, notes, current, cut
         else:
             for key in ('recent_password_breaches','password_breaches','breaches'):
                 reason=reason.replace('<'+key+'>',str(r[key]))
-            reason=reason.replace('<基準日>',str(cutoff))
+            reason=reason.replace('<基準日>',jp_date(str(cutoff)))
             if risk=='unknown':
                 reason='流出元は見つかっていないが、'+'、'.join(NAMES[p] for p in args.providers if states[p]!='ok')+' で照会できていない'
         parts.append(f'#### {esc(RISKS[risk]+" "+r["email"])}\n\n{esc(reason)}')
@@ -907,7 +907,7 @@ def render_markdown(args, summaries, details, active, cache, notes, current, cut
         unavailable = '、'.join(NAMES[p] for p in args.providers if states[p] != 'ok')
 
         def action_text(value):
-            infection = f"（感染の記録 {extra.get('infections', 0)} 件、最新の感染日 {r['infostealer_latest'] or '—'}）"
+            infection = f"（感染の記録 {extra.get('infections', 0)} 件、最新の感染日 {jp_date(r['infostealer_latest']) if r['infostealer_latest'] else '—'}）"
             if not extra.get('infections', 0):
                 value = value.replace('（感染の記録 <infections> 件、最新の感染日 <infostealer_latest>）', '')
             else:
@@ -952,18 +952,19 @@ def render_markdown(args, summaries, details, active, cache, notes, current, cut
         if states.get('hudsonrock')=='ok' and extra['infections']==0:
             parts.append(esc('インフォスティーラー: 感染の記録なし（'+NAMES['hudsonrock']+'）')+'\n\n')
         elif states.get('hudsonrock')=='ok':
-            parts.append('##### インフォスティーラー\n\n'+pairs([('感染の記録の件数',extra['infections']),('最新の感染日',(extra['compromised_dates'] or ['—'])[-1]),('感染した端末にあった社内サービスの認証情報の数',extra['corporate_services']),('個人向けサービスの認証情報の数',extra['user_services'])]))
+            parts.append('##### インフォスティーラー\n\n'+pairs([('感染の記録の件数',extra['infections']),('最新の感染日',jp_date(extra['compromised_dates'][-1]) if extra['compromised_dates'] else '—'),('感染した端末にあった社内サービスの認証情報の数',extra['corporate_services']),('個人向けサービスの認証情報の数',extra['user_services'])]))
         parts.append(esc('／'.join(NAMES[p]+': '+states_labels[states[p]] for p in args.providers))+'\n\n')
-    parts.append('## 検出なしのアドレス\n\n次の照会先では見つからなかった。照会していない照会先に流出が載っている可能性は残る\n\n')
+    parts.append('## 検出なしのアドレス\n\n')
     none=[r for r in summaries if r['risk']=='none']
     if none:
+        parts.append('次の照会先では見つからなかった。照会していない照会先に流出が載っている可能性は残る\n\n')
         parts.append(table(['アドレス', '照会した照会先'],
                            [[r['email'], '、'.join(NAMES[p] for p in r['providers_ok'].split())]
                             for r in none]))
     else: parts.append('なし')
-    parts += ['## 調査の条件\n\n', pairs([('実行の種類', 'キャッシュのみ' if args.report_only else '通常'), ('直近とみなす期間', f'{cutoff} 以降'), ('照会しなかった照会先', '／'.join(NAMES[p]+': '+notes[p][0].removeprefix('スキップ: ') for p in args.providers if p not in active) or '—')]), provider_table]
+    parts += ['## 調査の条件\n\n', pairs([('実行の種類', 'キャッシュのみ' if args.report_only else '通常'), ('直近とみなす期間', jp_date(str(cutoff))+' 以降'), ('照会しなかった照会先', '／'.join(NAMES[p]+': '+notes[p][0].removeprefix('スキップ: ') for p in args.providers if p not in active) or '—')]), provider_table]
     conditions=['感染の記録がある、または判定対象に情報窃取マルウェア由来の流出元がある','パスワードを含む（可能性・不明を含む）、直近の判定対象の流出元がある','パスワードを含む（可能性・不明を含む）判定対象の流出元がある','流出元がある（作られたデータの疑いを含む）','流出元がなく、有効な照会先すべてで照会済み','流出元がなく、有効な照会先に照会済みでないものがある']
-    parts+=['### 区分の決め方\n\n上から順に最初に当てはまった区分にします。直近は基準日以降の有効日（流出日と公開日の新しい方）で、日付不明も含みます。作られたデータの疑いがある流出元は判定対象から除きます。\n\n',table(['区分','条件'],zip(RISKS.values(),conditions)),'検出は侵害を意味しない。対応の詳細は事後対応の手順に従う\n\nこのファイルは個人情報を含む。共有の範囲に注意する\n\n']
+    parts+=['区分の決め方: 上から順に最初に当てはまった区分にします。直近は基準日以降の有効日（流出日と公開日の新しい方）で、日付不明も含みます。作られたデータの疑いがある流出元は判定対象から除きます。\n\n',table(['区分','条件'],zip(RISKS.values(),conditions)),'検出は侵害を意味しない。対応の詳細は事後対応の手順に従う\n\nこのファイルは個人情報を含む。共有の範囲に注意する\n\n']
     if 'leakcheck' in active: parts.append('[Powered by LeakCheck](https://leakcheck.io)')
     return '\n\n'.join(part.strip() for part in parts) + '\n'
 
