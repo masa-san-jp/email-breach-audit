@@ -1,0 +1,23 @@
+# 出力物・キャッシュ（個人情報を含む。SPEC §12 S-7）
+breach-check-output/
+*.sqlite
+*.sqlite-journal
+*.csv
+report.html
+
+# 実在のアドレスの一覧を置きがちな名前
+emails*.txt
+addresses*.txt
+input/
+
+# 秘密情報
+.env
+.env.*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
