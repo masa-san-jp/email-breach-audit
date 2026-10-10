@@ -1,4 +1,4 @@
-"""SPEC v0.13 §14: acceptance checks through the public injection points."""
+"""SPEC v0.14 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -311,9 +311,15 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn('DO_NOT_PRINT_RESPONSE', self.stderr + self.html())
 
 
-    def test_spec_version_references_are_v013(self):
-        self.assertIn('SPEC.md v0.13', audit.__doc__)
-        self.assertIn('SPEC v0.13', __doc__)
+    def test_spec_version_references_are_v014(self):
+        self.assertIn('SPEC.md v0.14', audit.__doc__)
+        self.assertIn('SPEC v0.14', __doc__)
+
+    def test_progress_duration_format(self):
+        self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
+        self.assertEqual(audit.format_duration(0), '0.0 秒')
+        self.assertEqual(audit.format_duration(60), '約 1 分')
+        self.assertEqual(audit.format_duration(61), '約 2 分')
 
     def test_http_exception_retry_and_last_reason(self):
         errors = [http.client.IncompleteRead(b'partial'), http.client.BadStatusLine('bad'), http.client.LineTooLong('line')]

@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.13."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.14."""
 import argparse
 import calendar
 import collections
@@ -25,6 +25,12 @@ __version__ = '0.1.0'
 SCHEMA_VERSION = 2
 PROVIDERS = ('hibp', 'leakcheck', 'hudsonrock', 'xon')
 FLAGS = ('stealer_log', 'spam_list', 'fabricated', 'unverified', 'malware')
+def format_duration(seconds: float) -> str:
+    if seconds < 60:
+        return f'{seconds:.1f} 秒'
+    return f'約 {math.ceil(seconds / 60)} 分'
+
+
 RISKS = dict(critical='緊急', high='高', medium='中', low='低', none='検出なし', unknown='判定不能')
 NAMES = dict(hibp='Have I Been Pwned', leakcheck='LeakCheck Public API',
              hudsonrock='Hudson Rock Cavalier OSINT', xon='XposedOrNot')
@@ -508,7 +514,7 @@ def run_workers(args, emails, active, intervals, key, cache, current, notes, que
     threads = []
     for provider in active:
         todo = [email for email in emails if needs_query(cache.usable(provider, email), args, current)]
-        log(f'[{provider}] 照会する件数 {len(todo)}・キャッシュを使う件数 {len(emails)-len(todo)}・所要時間の目安 {len(todo)*intervals[provider]} 秒')
+        log(f'[{provider}] 照会する件数 {len(todo)}・キャッシュを使う件数 {len(emails)-len(todo)}・所要時間の目安 {format_duration(len(todo)*intervals[provider])}')
         if todo:
             states[provider] = dict(running=False, finished=False, interrupted=False, completed=0, catalog=True)
             threads.append(threading.Thread(target=worker, args=(provider, todo)))
@@ -954,7 +960,7 @@ def execute(args, current, today):
         counts = collections.Counter(r['risk'] for r in summaries)
         partial = sum(r['coverage'] == 'partial' for r in summaries)
         code = 130 if interrupted else 3 if partial else 0
-        log(' ／ '.join(f'{risk}: {counts[risk]}' for risk in RISKS) + f' ／ partial: {partial}')
+        log(' ／ '.join(f'{label}: {counts[risk]}' for risk, label in RISKS.items()) + f' ／ 照会できなかった照会先があるアドレス: {partial}')
         for name in ('summary.csv', 'findings.csv', 'report.html'):
             log(str(outdir / name))
         log(str(record_path))
