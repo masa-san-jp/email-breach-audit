@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.26."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.27."""
 import argparse
 import calendar
 import collections
@@ -555,6 +555,7 @@ def merge_key(name):
         if value.endswith(suffix):
             value = value[:-len(suffix)]
             break
+    value = re.sub(r'[-_\s]+(scraped|scraping|scrape)[-_\s]*$', '', value)
     value = re.sub('[^a-z0-9]', '', value)
     return value or re.sub('[^a-z0-9]', '', lowered) or lowered
 

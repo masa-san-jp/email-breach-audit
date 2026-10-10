@@ -1,4 +1,4 @@
-"""SPEC v0.26 §14: acceptance checks through the public injection points."""
+"""SPEC v0.27 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -226,6 +226,12 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn('上のサービスと同じ・似たパスワード', report)
         self.assertIn('| 特定のサービスではない一覧 |', report)
 
+    def test_merge_key_drops_trailing_scraped(self):
+        self.assertEqual(audit.merge_key('Twitter-Scraped'), 'twitter')
+        self.assertEqual(audit.merge_key('Twitter (200M)'), 'twitter')
+        self.assertEqual(audit.merge_key('Twitter.com (scraping data)'), 'twitter')
+        self.assertEqual(audit.merge_key('Scraped'), 'scraped')
+
     def test_a09_risk_categories_and_boundaries(self):
         cases = [
             ('critical', source(flags=['stealer_log'])),
@@ -380,8 +386,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.26', audit.__doc__)
-        self.assertIn('SPEC v0.26', __doc__)
+        self.assertIn('SPEC.md v0.27', audit.__doc__)
+        self.assertIn('SPEC v0.27', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')

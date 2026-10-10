@@ -21,6 +21,14 @@
 | コマンドのオプションと環境変数 | [SPEC §11](SPEC.md#11-cli-仕様) |
 | 個人情報の扱い | [SPEC §12](SPEC.md#12-セキュリティとプライバシー) |
 
+使い方（Python 3 の標準ライブラリだけで動く。オプションと環境変数は [SPEC §11](SPEC.md#11-cli-仕様)）:
+
+```sh
+HIBP_API_KEY="$(cat ~/.config/email-breach-audit/hibp_api_key)" python3 email_breach_audit.py <アドレスの一覧のファイル>
+```
+
+結果は `~/breach-check-output/` の `report.md`（読む用）、`summary.csv`・`findings.csv`（集計用）、`history.csv`（全実行の履歴）に出る（[SPEC §10](SPEC.md#10-出力仕様)）。
+
 検出の後の判定と対応は、[事後対応の仕様](docs/post-investigation-response-design.md)に従う。
 
 ## 作業する人へ
