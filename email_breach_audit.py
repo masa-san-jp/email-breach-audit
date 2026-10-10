@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.21."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.22."""
 import argparse
 import calendar
 import collections
@@ -719,6 +719,34 @@ RISK_WORDS = {'critical': ['情報窃取マルウェアの記録がある',
  'unknown': ['照会できなかった照会先があり、判断できない',
              '流出元は見つかっていないが、<照会状態が ok でない照会先の名称を `、` でつなぐ> で照会できていない',
              '時間をおいて再実行する。それまでは未確認として扱う（事後対応の仕様 §5 の R5）']}
+ORGANIZATION_ACTIONS = [('緊急', '対応責任者', '本人に連絡し、下の「本人が行うこと」を指示する（連絡の文面は事後対応の仕様 §13）', '本人に指示した日時を記録した'),
+ ('緊急', '端末管理者', '本人が使う端末の感染の有無を調べる（感染の記録 <infections> 件、最新の感染日 <infostealer_latest>）', '調べた端末と、感染の有無を記録した'),
+ ('緊急', 'ID・メール管理者', '会社アカウントのすべてのセッションを失効させる', '失効させた日時を記録した'),
+ ('緊急', 'ID・メール管理者', '会社アカウントに、次回ログイン時のパスワード変更を強制する', '管理画面で設定されていることを確かめた'),
+ ('緊急', 'ID・メール管理者', '会社アカウントの直近 30 日のログイン履歴を調べる', '本人が説明できないログインがない、または見つけたログインを対応責任者に報告した'),
+ ('緊急', 'ID・メール管理者', '会社アカウントの転送・フィルタ・委任の設定を調べる', '本人が設定していないものがない、または見つけたものを削除した'),
+ ('緊急', 'ID・メール管理者', '会社アカウントで許可されている外部アプリを調べる', '本人が許可していないものがない、または見つけたものの許可を取り消した'),
+ ('高・中', '対応責任者', '本人に連絡し、下の「本人が行うこと」を指示する（連絡の文面は事後対応の仕様 §13.1）', '本人に指示した日時を記録した'),
+ ('高・中', 'ID・メール管理者', '会社アカウントに、次回ログイン時のパスワード変更を強制する', '管理画面で設定されていることを確かめた'),
+ ('高・中', 'ID・メール管理者', '会社アカウントのすべてのセッションを失効させる', '失効させた日時を記録した'),
+ ('高・中', 'ID・メール管理者', '会社アカウントで多要素認証が有効かを調べる', '有効になっている、または有効にした'),
+ ('高・中', 'ID・メール管理者', '会社アカウントの直近 30 日のログイン履歴を調べる', '本人が説明できないログインがない、または見つけたログインを対応責任者に報告した'),
+ ('高・中', 'ID・メール管理者', '会社アカウントの転送・フィルタの設定を調べる', '本人が設定していないものがない、または見つけたものを削除した'),
+ ('低', '対応責任者', '本人に連絡し、下の「本人が行うこと」を指示する', '本人に指示した日時を記録した'),
+ ('低', 'ID・メール管理者', '会社アカウントで多要素認証が有効かを調べる', '有効になっている、または有効にした'),
+ ('判定不能', '対応責任者', 'このツールを再実行し、<照会できていない照会先> の結果を得る', 'このアドレスの照会状態が、すべて「照会済み」になった')]
+PERSON_ACTIONS = [('緊急', '端末管理者の調査が終わるまで、その端末でパスワードと認証コードを入力しない', '端末管理者から調査の終了を知らされた'),
+ ('緊急', '端末管理者が指定した別の端末で、会社アカウントのパスワードを変更する', '変更した'),
+ ('緊急', '端末管理者が指定した別の端末で、<サービス名> のパスワードを変更する', '変更した、またはそのサービスを使っていない'),
+ ('緊急', '終わったことをセキュリティ管理者に報告する（パスワードは書かない）', '報告した'),
+ ('高・中', '<サービス名> のパスワードを変更する', '変更した、またはそのサービスを使っていない'),
+ ('高・中', '上のサービスと同じ・似たパスワードを使っているほかのサービスのパスワードを、すべて変更する', '該当するサービスがない、またはすべて変更した'),
+ ('高・中', '会社アカウントのパスワードを、ほかのどのサービスとも違うものに変更する', '変更した'),
+ ('高・中', 'パスワードを変更したサービスのうち、多要素認証を使えるものすべてで、多要素認証を有効にする', '有効にした'),
+ ('高・中', '終わったことと、会社アカウントで同じ・似たパスワードを使っていたかを、セキュリティ管理者に報告する（パスワードは書かない）', '報告した'),
+ ('低', '<対象サービスを `、` でつなぐ> や会社を名乗るメールのリンクから、パスワードを入力しない', '—（続けて守る）'),
+ ('低', '不審なメールを受け取ったら、開かずにセキュリティ窓口へ転送する', '—（続けて守る）')]
+
 def previous_comparison(outdir, current, findings, active):
     base = current.astimezone().strftime('%Y%m%d-%H%M%S')
     runs = outdir / 'runs'
@@ -782,7 +810,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
     partial = sum(r['coverage'] == 'partial' for r in summaries)
     parts = ['<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>メールアドレス流出調査レポート</title>',
     '''<style>
-:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:45%}.overview th,.overview td{font-size:inherit}.date{white-space:nowrap}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.request{border:1px solid var(--line);padding:16px;white-space:pre-wrap}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
+:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:45%}.overview th,.overview td{font-size:inherit}.date{white-space:nowrap}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
 @media(prefers-color-scheme:dark){:root{--bg:#171d25;--paper:#202935;--ink:#e5ebf2;--line:#526070;--muted:#2d3948;--accent:#84bcec}section.addr h3{color:var(--ink)}}
 @page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}section.addr{padding:10px;break-inside:avoid}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3,h2+p{break-after:avoid}section.addr h3{color:black}a{color:black}table{width:100%}}
 </style></head><body><main>''', '<h1>メールアドレス流出調査レポート</h1>']
@@ -791,7 +819,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
     classification_reasons = [
         ('即時対応', '漏れた情報が、今も不正ログインに使える可能性が高い。見つけたその日に手を打つ'),
         ('順次対応', 'パスワードは古い流出だが、使い回していれば今も危険。または、照会できていない照会先がある。即時対応の後に、順に進める'),
-        ('急ぎ不要', 'パスワードは漏れていない。なりすましメールへの注意を伝えるだけでよい'),
+        ('急ぎ不要', 'パスワードは漏れていない。会社アカウントの多要素認証を確かめ、なりすましメールへの備えを本人に指示する'),
         ('対応不要', '照会した照会先では見つからなかった')]
     order = ['critical', 'high', 'medium', 'unknown', 'low', 'none']
     ordered = sorted(enumerate(summaries), key=lambda pair: (order.index(pair[1]['risk']), -pair[1]['breaches'], pair[0]))
@@ -839,7 +867,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         span=local_time(times[0])+'〜'+local_time(times[-1]) if times else '—'
         provider_rows.append([NAMES[provider],CONFIRMATION[provider],*[sum(details[r['email']][2][provider]==state for r in summaries) for state in states_labels],span,sum(r['status']=='ok' and expired(r,current,args.max_age) for r in used),'／'.join(notes[provider]) or '—'])
     provider_table = table(['照会先','確認の状態','照会済み','エラー','未照会','照会しなかった','結果の取得日時','古い結果','備考'],provider_rows)
-    parts.append('<h2>対応が必要なアドレス</h2>')
+    parts.append('<h2>アドレスごとの対応</h2>')
     previous_classification = None
     for _,r in ordered:
         if r['risk']=='none': continue
@@ -861,27 +889,33 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         if any((r['email'], f['breach']) in new_pairs for f in findings):
             parts[-1] = parts[-1].replace('</h3>', ' <span class="new">新規</span></h3>')
         findings = sorted(findings, key=report_order)
-        services = '、'.join(f['breach'] for f in findings if risk == 'low' or f['in_scope'] and f['has_password'] is not False) or 'なし（端末の調査を優先）'
+        services = [f['breach'] for f in findings
+                    if risk == 'low' or f['in_scope'] and f['has_password'] is not False]
         unavailable = '、'.join(NAMES[p] for p in args.providers if states[p] != 'ok')
-        actions = []
-        if risk == 'critical':
-            infection = f"（感染の記録 {extra['infections']} 件、最新の感染日 {r['infostealer_latest'] or '—'}）" if extra.get('infections', 0) else ''
-            actions = [('端末管理者', 'このアドレスの利用者が使う端末を調べる'+infection),
-                       ('対応責任者', '本人に「端末調査の連絡」を送る'),
-                       ('ID・メール管理者', '会社のアカウントのセッションを失効させ、ログイン履歴、転送・フィルタの設定、認証方法、外部アプリの許可を確認する')]
-        elif risk in ('high', 'medium'):
-            actions = [('対応責任者', f'本人に「パスワード変更の依頼」を送る（対象サービス: {services}）'),
-                       ('ID・メール管理者', 'ログイン履歴、転送・フィルタの設定、認証方法を確認する'),
-                       ('ID・メール管理者', '本人から「会社のアカウントでも同じ・似たパスワードを使っていた」と連絡があったら、会社のパスワードを変更させ、セッションを失効させる')]
-        elif risk == 'low':
-            actions = [('対応責任者', f'本人に「なりすましメールへの注意」を送る（対象サービス: {services}）')]
-        elif risk == 'unknown':
-            actions = [('対応責任者', unavailable+' について、時間をおいてこのツールを再実行する')]
-        parts.append('<h4>やること</h4>'+table(['担当','内容'], [('□ '+owner, content) for owner,content in actions]))
+
+        def action_text(value):
+            infection = f"（感染の記録 {extra.get('infections', 0)} 件、最新の感染日 {r['infostealer_latest'] or '—'}）"
+            if not extra.get('infections', 0):
+                value = value.replace('（感染の記録 <infections> 件、最新の感染日 <infostealer_latest>）', '')
+            else:
+                value = value.replace('（感染の記録 <infections> 件、最新の感染日 <infostealer_latest>）', infection)
+            return value.replace('<照会できていない照会先>', unavailable).replace('<対象サービスを `、` でつなぐ>', '、'.join(services))
+
+        organization_rows = [('□ '+owner, action_text(action), condition)
+                             for category, owner, action, condition in ORGANIZATION_ACTIONS
+                             if RISKS[risk] in category.split('・')]
+        parts.append('<h4>組織として行うこと</h4>'+table(['担当','行うこと','完了の条件'], organization_rows))
         if risk != 'unknown':
-            messages = {'critical': '外部の調査で、あなたが使う端末が情報を盗むマルウェアに感染していた可能性があるとわかりました（会社のメールアドレス <アドレス>）。会社の端末管理者が端末を調べます。それまで、その端末では新しいパスワードや認証コードを入力しないでください。パスワードの変更は、担当者が案内する安全な端末で行ってください。パスワード・認証コードは誰にも送らないでください。', 'high': '外部サービスの流出情報に、会社のメールアドレス（<アドレス>）が含まれていました。次のサービスのパスワードを、直ちに変更してください: <対象サービス>。同じ、または似たパスワードを会社のアカウントやほかのサービスで使っている場合は、それらもすべて直ちに変更してください。多要素認証を使えるサービスでは、有効にしてください。変更が終わったら、セキュリティ窓口に「変更した」ことと、「会社のアカウントで同じ・似たパスワードを使っていたか」を知らせてください。パスワード・認証コードは送らないでください。', 'low': '外部サービスの流出情報に、会社のメールアドレス（<アドレス>）が含まれていました（<対象サービス>）。パスワードは含まれていませんが、このアドレスを狙ったなりすましメールが届くおそれがあります。これらのサービスや会社を名乗るメールのリンクから、パスワードを入力しないでください。不審なメールは、セキュリティ窓口に転送してください。'}
-            message = messages['high' if risk == 'medium' else risk].replace('<アドレス>', r['email']).replace('<対象サービス>', services)
-            parts.append('<h4>本人に送る文面</h4><div class="request">'+esc(message)+'</div>')
+            person_rows = []
+            for category, action, condition in PERSON_ACTIONS:
+                if RISKS[risk] not in category.split('・'):
+                    continue
+                if '<サービス名>' in action:
+                    person_rows.extend(('□ '+action.replace('<サービス名>', service), condition) for service in services)
+                else:
+                    person_rows.append(('□ '+action_text(action), condition))
+            parts.append('<h4>本人が行うこと</h4><p>対応責任者がこの表を本人に渡し、すべての行が完了するまで追う</p>'
+                         +table(['行うこと','完了の条件'], person_rows))
         parts.append('<h4>根拠</h4>')
         rows=[]
         for f in findings:

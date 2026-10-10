@@ -1,4 +1,4 @@
-"""SPEC v0.21 §14: acceptance checks through the public injection points."""
+"""SPEC v0.22 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -313,8 +313,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.21', audit.__doc__)
-        self.assertIn('SPEC v0.21', __doc__)
+        self.assertIn('SPEC.md v0.22', audit.__doc__)
+        self.assertIn('SPEC v0.22', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -473,7 +473,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(self.run_audit(), 0)
         markup = self.html()
         markers = ['<h1>', '<h2>調査結果の数字', '<h2>流出元ごとの影響',
-                   '<h2>対応が必要なアドレス',
+                   '<h2>アドレスごとの対応',
                    '<h2>検出なしのアドレス', '<tr class="addr"', '<h2>調査の条件',
                    '検出は侵害を意味しない', '個人情報を含む', 'Powered by LeakCheck']
         positions = [markup.index(marker) for marker in markers]
@@ -668,7 +668,10 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(markup.count('感染した端末にあった社内サービスの認証情報の数'),2)
         self.assertIn('個人向けサービスの認証情報の数',markup)
         self.assertIn('2025-01-02',markup)
-        self.assertEqual(markup.count('□ 端末管理者</td><td>このアドレスの利用者が使う端末を調べる（感染の記録 2 件、最新の感染日 <span class="date">2025-01-02</span>）'), 2)
+        self.assertEqual(markup.count('□ 端末管理者</td><td>本人が使う端末の感染の有無を調べる（感染の記録 2 件、最新の感染日 <span class="date">2025-01-02</span>）'), 2)
+        self.assertEqual(markup.count('□ 端末管理者が指定した別の端末で、Example のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない'), 1)
+        infection_section = markup.split('<h3>緊急 infection@example.com</h3>', 1)[1].split('</section>', 1)[0]
+        self.assertNotIn(' のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない', infection_section)
         self.assertEqual(markup.count('<h3>即時対応</h3>'), 1)
         self.assertNotIn('<h3>順次対応</h3>', markup)
         self.assertNotIn('<h3>急ぎ不要</h3>', markup)
@@ -791,15 +794,19 @@ class AcceptanceTests(unittest.TestCase):
         self.run_audit(options=['--report-only'])
         markup = self.html()
         expected = ['PassNew', 'PassOld', 'PassUndated', 'NoPassNew']
-        impact = markup[markup.index('<h2>流出元ごとの影響</h2>'):markup.index('<h2>対応が必要なアドレス</h2>')]
+        impact = markup[markup.index('<h2>流出元ごとの影響</h2>'):markup.index('<h2>アドレスごとの対応</h2>')]
         evidence = markup[markup.index('<h4>根拠</h4>'):]
         for part in (impact, evidence):
             positions = [part.index('<td>'+name) for name in expected]
             self.assertEqual(positions, sorted(positions))
         self.assertEqual(markup.count(audit.ORDER_NOTE), 2)
-        self.assertIn('対象サービス: PassNew、PassOld、PassUndated）', markup)
+        actions = markup[markup.index('<h4>本人が行うこと</h4>'):markup.index('<h4>根拠</h4>')]
+        positions = [actions.index('□ '+name+' のパスワードを変更する')
+                     for name in ['PassNew', 'PassOld', 'PassUndated']]
+        self.assertEqual(positions, sorted(positions))
+        self.assertNotIn('NoPassNew', actions)
 
-    def test_a19_report_numbers_impacts_actions_and_request(self):
+    def test_a19_report_numbers_impacts_and_action_tables(self):
         addresses = [f'{risk}@example.com' for risk in audit.RISKS]
         self.input.write_text('\n'.join(addresses))
         items = [source(name='Stealer', password=False, flags=['stealer_log']),
@@ -857,38 +864,78 @@ class AcceptanceTests(unittest.TestCase):
                           zip(audit.RISKS.values(), meanings, classifications)])
         reasons = ['漏れた情報が、今も不正ログインに使える可能性が高い。見つけたその日に手を打つ',
                    'パスワードは古い流出だが、使い回していれば今も危険。または、照会できていない照会先がある。即時対応の後に、順に進める',
-                   'パスワードは漏れていない。なりすましメールへの注意を伝えるだけでよい',
+                   'パスワードは漏れていない。会社アカウントの多要素認証を確かめ、なりすましメールへの備えを本人に指示する',
                    '照会した照会先では見つからなかった']
         for label, reason in zip(['即時対応','順次対応','急ぎ不要','対応不要'], reasons):
             self.assertIn(label+': '+reason, visible)
         markup = self.html()
-        markers = ['<h2>調査結果の数字', '<h2>流出元ごとの影響', '<h2>対応が必要なアドレス',
+        markers = ['<h2>調査結果の数字', '<h2>流出元ごとの影響', '<h2>アドレスごとの対応',
                    '<h3>即時対応</h3>', '緊急 critical@example.com', '高 high@example.com',
                    '<h3>順次対応</h3>', '中 medium@example.com', '判定不能 unknown@example.com',
                    '<h3>急ぎ不要</h3>', '低 low@example.com', '<h2>検出なしのアドレス', '<h2>調査の条件']
         positions = [markup.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
-        conditional = '本人から「会社のアカウントでも同じ・似たパスワードを使っていた」と連絡があったら、会社のパスワードを変更させ、セッションを失効させる'
-        expected_actions = [
-            [('端末管理者','このアドレスの利用者が使う端末を調べる'), ('対応責任者','本人に「端末調査の連絡」を送る'), ('ID・メール管理者','会社のアカウントのセッションを失効させ、ログイン履歴、転送・フィルタの設定、認証方法、外部アプリの許可を確認する')],
-            [('対応責任者','本人に「パスワード変更の依頼」を送る（対象サービス: Shared）'), ('ID・メール管理者','ログイン履歴、転送・フィルタの設定、認証方法を確認する'), ('ID・メール管理者',conditional)],
-            [('対応責任者','本人に「パスワード変更の依頼」を送る（対象サービス: Old）'), ('ID・メール管理者','ログイン履歴、転送・フィルタの設定、認証方法を確認する'), ('ID・メール管理者',conditional)],
-            [('対応責任者','LeakCheck Public API について、時間をおいてこのツールを再実行する')],
-            [('対応責任者','本人に「なりすましメールへの注意」を送る（対象サービス: Shared）')]]
-        action_tables = [table for table in parser.tables if table[0] == ['担当','内容']]
-        self.assertEqual(len(action_tables), 5)
-        for index, actions in enumerate(expected_actions):
-            self.assertEqual(action_tables[index][1:], [['□ '+owner, content] for owner,content in actions])
-        messages = ['外部の調査で、あなたが使う端末が情報を盗むマルウェアに感染していた可能性があるとわかりました（会社のメールアドレス <アドレス>）。会社の端末管理者が端末を調べます。それまで、その端末では新しいパスワードや認証コードを入力しないでください。パスワードの変更は、担当者が案内する安全な端末で行ってください。パスワード・認証コードは誰にも送らないでください。', '外部サービスの流出情報に、会社のメールアドレス（<アドレス>）が含まれていました。次のサービスのパスワードを、直ちに変更してください: <対象サービス>。同じ、または似たパスワードを会社のアカウントやほかのサービスで使っている場合は、それらもすべて直ちに変更してください。多要素認証を使えるサービスでは、有効にしてください。変更が終わったら、セキュリティ窓口に「変更した」ことと、「会社のアカウントで同じ・似たパスワードを使っていたか」を知らせてください。パスワード・認証コードは送らないでください。', '外部サービスの流出情報に、会社のメールアドレス（<アドレス>）が含まれていました（<対象サービス>）。パスワードは含まれていませんが、このアドレスを狙ったなりすましメールが届くおそれがあります。これらのサービスや会社を名乗るメールのリンクから、パスワードを入力しないでください。不審なメールは、セキュリティ窓口に転送してください。']
-        for index, (email, service) in enumerate([('critical@example.com',None), ('high@example.com','Shared'), ('medium@example.com','Old'), ('unknown@example.com',None), ('low@example.com','Shared')]):
+        expected_organization = [[['担当', '行うこと', '完了の条件'],
+          ['□ 対応責任者', '本人に連絡し、下の「本人が行うこと」を指示する（連絡の文面は事後対応の仕様 §13）', '本人に指示した日時を記録した'],
+          ['□ 端末管理者', '本人が使う端末の感染の有無を調べる', '調べた端末と、感染の有無を記録した'],
+          ['□ ID・メール管理者', '会社アカウントのすべてのセッションを失効させる', '失効させた日時を記録した'],
+          ['□ ID・メール管理者', '会社アカウントに、次回ログイン時のパスワード変更を強制する', '管理画面で設定されていることを確かめた'],
+          ['□ ID・メール管理者', '会社アカウントの直近 30 日のログイン履歴を調べる', '本人が説明できないログインがない、または見つけたログインを対応責任者に報告した'],
+          ['□ ID・メール管理者', '会社アカウントの転送・フィルタ・委任の設定を調べる', '本人が設定していないものがない、または見つけたものを削除した'],
+          ['□ ID・メール管理者', '会社アカウントで許可されている外部アプリを調べる', '本人が許可していないものがない、または見つけたものの許可を取り消した']],
+         [['担当', '行うこと', '完了の条件'],
+          ['□ 対応責任者', '本人に連絡し、下の「本人が行うこと」を指示する（連絡の文面は事後対応の仕様 §13.1）', '本人に指示した日時を記録した'],
+          ['□ ID・メール管理者', '会社アカウントに、次回ログイン時のパスワード変更を強制する', '管理画面で設定されていることを確かめた'],
+          ['□ ID・メール管理者', '会社アカウントのすべてのセッションを失効させる', '失効させた日時を記録した'],
+          ['□ ID・メール管理者', '会社アカウントで多要素認証が有効かを調べる', '有効になっている、または有効にした'],
+          ['□ ID・メール管理者', '会社アカウントの直近 30 日のログイン履歴を調べる', '本人が説明できないログインがない、または見つけたログインを対応責任者に報告した'],
+          ['□ ID・メール管理者', '会社アカウントの転送・フィルタの設定を調べる', '本人が設定していないものがない、または見つけたものを削除した']],
+         [['担当', '行うこと', '完了の条件'],
+          ['□ 対応責任者', '本人に連絡し、下の「本人が行うこと」を指示する（連絡の文面は事後対応の仕様 §13.1）', '本人に指示した日時を記録した'],
+          ['□ ID・メール管理者', '会社アカウントに、次回ログイン時のパスワード変更を強制する', '管理画面で設定されていることを確かめた'],
+          ['□ ID・メール管理者', '会社アカウントのすべてのセッションを失効させる', '失効させた日時を記録した'],
+          ['□ ID・メール管理者', '会社アカウントで多要素認証が有効かを調べる', '有効になっている、または有効にした'],
+          ['□ ID・メール管理者', '会社アカウントの直近 30 日のログイン履歴を調べる', '本人が説明できないログインがない、または見つけたログインを対応責任者に報告した'],
+          ['□ ID・メール管理者', '会社アカウントの転送・フィルタの設定を調べる', '本人が設定していないものがない、または見つけたものを削除した']],
+         [['担当', '行うこと', '完了の条件'],
+          ['□ 対応責任者', 'このツールを再実行し、LeakCheck Public API の結果を得る', 'このアドレスの照会状態が、すべて「照会済み」になった']],
+         [['担当', '行うこと', '完了の条件'],
+          ['□ 対応責任者', '本人に連絡し、下の「本人が行うこと」を指示する', '本人に指示した日時を記録した'],
+          ['□ ID・メール管理者', '会社アカウントで多要素認証が有効かを調べる', '有効になっている、または有効にした']]]
+        expected_person = [[['行うこと', '完了の条件'],
+          ['□ 端末管理者の調査が終わるまで、その端末でパスワードと認証コードを入力しない', '端末管理者から調査の終了を知らされた'],
+          ['□ 端末管理者が指定した別の端末で、会社アカウントのパスワードを変更する', '変更した'],
+          ['□ 終わったことをセキュリティ管理者に報告する（パスワードは書かない）', '報告した']],
+         [['行うこと', '完了の条件'],
+          ['□ Shared のパスワードを変更する', '変更した、またはそのサービスを使っていない'],
+          ['□ 上のサービスと同じ・似たパスワードを使っているほかのサービスのパスワードを、すべて変更する', '該当するサービスがない、またはすべて変更した'],
+          ['□ 会社アカウントのパスワードを、ほかのどのサービスとも違うものに変更する', '変更した'],
+          ['□ パスワードを変更したサービスのうち、多要素認証を使えるものすべてで、多要素認証を有効にする', '有効にした'],
+          ['□ 終わったことと、会社アカウントで同じ・似たパスワードを使っていたかを、セキュリティ管理者に報告する（パスワードは書かない）', '報告した']],
+         [['行うこと', '完了の条件'],
+          ['□ Old のパスワードを変更する', '変更した、またはそのサービスを使っていない'],
+          ['□ 上のサービスと同じ・似たパスワードを使っているほかのサービスのパスワードを、すべて変更する', '該当するサービスがない、またはすべて変更した'],
+          ['□ 会社アカウントのパスワードを、ほかのどのサービスとも違うものに変更する', '変更した'],
+          ['□ パスワードを変更したサービスのうち、多要素認証を使えるものすべてで、多要素認証を有効にする', '有効にした'],
+          ['□ 終わったことと、会社アカウントで同じ・似たパスワードを使っていたかを、セキュリティ管理者に報告する（パスワードは書かない）', '報告した']],
+         [['行うこと', '完了の条件'],
+          ['□ Shared や会社を名乗るメールのリンクから、パスワードを入力しない', '—（続けて守る）'],
+          ['□ 不審なメールを受け取ったら、開かずにセキュリティ窓口へ転送する', '—（続けて守る）']]]
+        organization_tables = [t for t in parser.tables if t[0] == ['担当','行うこと','完了の条件']]
+        person_tables = [t for t in parser.tables if t[0] == ['行うこと','完了の条件']]
+        self.assertEqual(organization_tables, expected_organization)
+        self.assertEqual(person_tables, expected_person)
+        for index, section in enumerate(sections):
+            self.assertIn('組織として行うこと', section)
             if index == 3:
-                self.assertNotIn('本人に送る文面', sections[index]); continue
-            message = messages[0 if index == 0 else 2 if index == 4 else 1].replace('<アドレス>', email).replace('<対象サービス>', service or '')
-            self.assertIn('本人に送る文面', sections[index])
-            self.assertIn(message, sections[index])
+                self.assertNotIn('本人が行うこと', section)
+            else:
+                self.assertIn('本人が行うこと 対応責任者がこの表を本人に渡し、すべての行が完了するまで追う', section)
+        self.assertNotIn('<section class="addr" data-risk="none">', markup)
+        self.assertNotIn('やること', markup)
+        self.assertNotIn('本人に送る文面', markup)
         self.assertNotIn('今日中', markup)
         self.assertNotIn('営業日', markup)
-        self.assertEqual(self.html().count('<div class="request">'), 4)
         self.assertIn('2025-01-01 （LeakCheck Public API）', visible)
         self.assertIn('2023-10-10  以降または日付不明のものが 1 件ある', visible)
         self.assertIn('どれも  2023-10-10  より前', visible)
