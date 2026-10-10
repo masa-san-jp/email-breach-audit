@@ -1,10 +1,9 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.24."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.25."""
 import argparse
 import calendar
 import collections
 import csv
 import datetime as dt
-import html
 import http.client
 import io
 import json
@@ -793,38 +792,31 @@ def previous_comparison(outdir, current, findings, active):
 ORDER_NOTE = '並び順: パスワードを含むもの（可能性を含む）が先、その中は流出日の新しい順（日付が不明なものは最後）'
 
 
-def render_html(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
-    def date_span(text):
-        year, _, rest = text.partition('年')
-        inner = '<span>'+year+'年</span>' + ('<wbr><span>'+rest+'</span>' if rest else '')
-        return '<span class="date">'+inner+'</span>'
-
+def render_markdown(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
     def esc(value):
-        escaped = html.escape(text_value(value), quote=True)
-        escaped = re.sub(r'(?<![0-9])(\d{4})-(\d{2})-(\d{2})(?![0-9])', r'\1年\2月\3日', escaped)
-        return re.sub(r'(?<![0-9])\d{4}年\d{2}月\d{2}日', lambda match: date_span(match[0]), escaped)
+        text = text_value(value)
+        text = re.sub(r'(?<![0-9])(\d{4})-(\d{2})-(\d{2})(?![0-9])', r'\1年\2月\3日', text)
+        text = re.sub(r'\r\n|\r|\n', ' ', text)
+        return re.sub(r'([\\|*_`\[\]<>#])', r'\\\1', text)
 
     def date_cell(value):
-        day, provider = value if isinstance(value, tuple) else (value, '')
-        if not day:
-            return '不明'
-        if day == '不明':
-            return '不明'
-        return date_span(html.escape(jp_date(day), quote=True))
+        day = value[0] if isinstance(value, tuple) else value
+        return esc(jp_date(day)) if day and day != '不明' else '不明'
     states_labels = dict(ok='照会済み', error='エラー', not_queried='未照会', skipped='照会しなかった')
     flag_labels = dict(stealer_log='情報窃取マルウェア由来', spam_list='スパム用リスト', fabricated='作られたデータの疑い（判定に使わない）', unverified='未検証', malware='マルウェア関連')
     def table(headers, rows, date_columns=()):
-        return '<table><thead><tr>' + ''.join('<th scope="col">'+esc(v)+'</th>' for v in headers) + '</tr></thead><tbody>' + ''.join('<tr>'+''.join('<td>'+(date_cell(v) if i in date_columns else esc(v))+'</td>' for i,v in enumerate(row))+'</tr>' for row in rows) + '</tbody></table>'
+        def row(values):
+            return '| ' + ' | '.join(values) + ' |'
+        return '\n'.join([row([esc(v) for v in headers]), row(['---'] * len(headers))] +
+                         [row([date_cell(v) if i in date_columns else esc(v)
+                               for i, v in enumerate(values)]) for values in rows])
+
     def pairs(rows):
-        return '<table class="overview"><tbody>'+''.join('<tr><th scope="row">'+esc(k)+'</th><td>'+esc(v)+'</td></tr>' for k,v in rows)+'</tbody></table>'
+        return table(['項目', '値'], rows)
+
     counts = collections.Counter(r['risk'] for r in summaries)
     partial = sum(r['coverage'] == 'partial' for r in summaries)
-    parts = ['<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>メールアドレス流出調査レポート</title>',
-    '''<style>
-:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:45%}.overview th,.overview td{font-size:inherit}.date>span{white-space:nowrap}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
-@media(prefers-color-scheme:dark){:root{--bg:#171d25;--paper:#202935;--ink:#e5ebf2;--line:#526070;--muted:#2d3948;--accent:#84bcec}section.addr h3{color:var(--ink)}}
-@page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}section.addr{padding:10px;break-inside:avoid}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3,h2+p{break-after:avoid}section.addr h3{color:black}a{color:black}table{width:100%}}
-</style></head><body><main>''', '<h1>メールアドレス流出調査レポート</h1>']
+    parts = ['# メールアドレス流出調査レポート']
     change, new_pairs = comparison or ('前回の記録なし（初回）', set())
     classifications = CLASSIFICATIONS
     classification_reasons = [
@@ -856,8 +848,8 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
     total = len(summaries)
     def proportion(number):
         return f'{number} 件（{math.floor(number * 1000 / total + 0.5) / 10:.1f}%）'
-    parts.append('<p class="subtitle">'+esc(local_time(current)+f' 作成 ／ 対象 {total} 件')+'</p>')
-    parts += ['<h2>調査結果の数字</h2>', pairs([
+    parts.append(esc(local_time(current)+f' 作成 ／ 対象 {total} 件')+'\n\n')
+    parts += ['## 調査結果の数字\n\n', pairs([
         ('調査したアドレス', f'{total} 件'),
         ('流出が見つかったアドレス', proportion(sum(r['breaches'] > 0 for r in summaries))),
         ('パスワードを含む流出があったアドレス', proportion(sum(r['password_breaches'] > 0 for r in summaries))),
@@ -868,8 +860,8 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         ('急ぎ不要のアドレス', f"{counts['low']} 件"),
         ('前回からの変化', change)]),
         table(['区分','件数','意味','対応の分類'], [[label,counts[risk],RISK_WORDS[risk][0],classifications[risk]] for risk,label in RISKS.items()]),
-        ''.join('<p>'+esc(label+': '+reason)+'</p>' for label, reason in classification_reasons),
-        '<h2>流出元ごとの影響</h2>', '<p>'+esc(ORDER_NOTE+'。流出日が同じなら、該当アドレスの多い順')+'</p>', table(['流出元','流出日','漏れた情報','パスワード','該当アドレス数','該当アドレス'], [item[-1] for item in sorted(impacts, key=lambda item: item[:4])], date_columns=(1,))]
+        ''.join(esc(label+': '+reason)+'\n\n' for label, reason in classification_reasons),
+        '## 流出元ごとの影響\n\n', esc(ORDER_NOTE+'。流出日が同じなら、該当アドレスの多い順')+'\n\n', table(['流出元','流出日','漏れた情報','パスワード','該当アドレス数','該当アドレス'], [item[-1] for item in sorted(impacts, key=lambda item: item[:4])], date_columns=(1,))]
     provider_rows=[]
     for provider in args.providers:
         used=[cache.usable(provider,r['email']) for r in summaries] if provider in active else []
@@ -878,14 +870,14 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         span=local_time(times[0])+'〜'+local_time(times[-1]) if times else '—'
         provider_rows.append([NAMES[provider],CONFIRMATION[provider],*[sum(details[r['email']][2][provider]==state for r in summaries) for state in states_labels],span,sum(r['status']=='ok' and expired(r,current,args.max_age) for r in used),'／'.join(notes[provider]) or '—'])
     provider_table = table(['照会先','確認の状態','照会済み','エラー','未照会','照会しなかった','結果の取得日時','古い結果','備考'],provider_rows)
-    parts.append('<h2>アドレスごとの対応</h2>')
+    parts.append('## アドレスごとの対応\n\n')
     previous_classification = None
     for _,r in ordered:
         if r['risk']=='none': continue
         extra,findings,states=details[r['email']]
         risk=r['risk']
         if classifications[risk] != previous_classification:
-            parts.append('<h3>'+esc(classifications[risk])+'</h3>')
+            parts.append('### '+esc(classifications[risk])+'\n\n')
             previous_classification = classifications[risk]
         reason=RISK_WORDS[risk][1]
         if risk=='critical':
@@ -896,9 +888,9 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
             reason=reason.replace('<基準日>',str(cutoff))
             if risk=='unknown':
                 reason='流出元は見つかっていないが、'+'、'.join(NAMES[p] for p in args.providers if states[p]!='ok')+' で照会できていない'
-        parts.append(f'<section class="addr" data-risk="{risk}"><h3>{esc(RISKS[risk]+" "+r["email"])}</h3><p>{esc(reason)}</p>')
+        parts.append(f'#### {esc(RISKS[risk]+" "+r["email"])}\n\n{esc(reason)}')
         if any((r['email'], f['breach']) in new_pairs for f in findings):
-            parts[-1] = parts[-1].replace('</h3>', ' <span class="new">新規</span></h3>')
+            parts[-1] = parts[-1].replace("\n\n", "（新規）\n\n", 1)
         findings = sorted(findings, key=report_order)
         services = [f['breach'] for f in findings
                     if risk == 'low' or f['in_scope'] and f['has_password'] is not False]
@@ -915,7 +907,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         organization_rows = [('□ '+owner, action_text(action), condition)
                              for category, owner, action, condition in ORGANIZATION_ACTIONS
                              if RISKS[risk] in category.split('・')]
-        parts.append('<h4>組織として行うこと</h4>'+table(['担当','行うこと','完了の条件'], organization_rows))
+        parts.append('##### 組織として行うこと\n\n'+table(['担当','行うこと','完了の条件'], organization_rows))
         if risk != 'unknown':
             person_rows = []
             for category, action, condition in PERSON_ACTIONS:
@@ -925,9 +917,9 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
                     person_rows.extend(('□ '+action.replace('<サービス名>', service), condition) for service in services)
                 else:
                     person_rows.append(('□ '+action_text(action), condition))
-            parts.append('<h4>本人が行うこと</h4><p>対応責任者がこの表を本人に渡し、すべての行が完了するまで追う</p>'
+            parts.append('##### 本人が行うこと\n\n対応責任者がこの表を本人に渡し、すべての行が完了するまで追う\n\n'
                          +table(['行うこと','完了の条件'], person_rows))
-        parts.append('<h4>根拠</h4>')
+        parts.append('##### 根拠\n\n')
         rows=[]
         for f in findings:
             caution=[flag_labels[flag] for flag in f['flags'].split('; ') if flag]
@@ -936,28 +928,25 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
             rows.append([f['breach']+(' 新規' if (r['email'], f['breach']) in new_pairs else ''),
                          (f['breach_date'], f['breach_date_source']),
                          (f['added_date'], f['added_date_source']),('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
-        if rows: parts.append('<p>'+esc(ORDER_NOTE)+'</p>')
+        if rows: parts.append(esc(ORDER_NOTE)+'\n\n')
         if rows: parts.append(table(['流出元','流出日','公開日','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows,date_columns=(1,2)))
         if states.get('hudsonrock')=='ok' and extra['infections']==0:
-            parts.append('<p>'+esc('インフォスティーラー: 感染の記録なし（'+NAMES['hudsonrock']+'）')+'</p>')
+            parts.append(esc('インフォスティーラー: 感染の記録なし（'+NAMES['hudsonrock']+'）')+'\n\n')
         elif states.get('hudsonrock')=='ok':
-            parts.append('<h4>インフォスティーラー</h4>'+pairs([('感染の記録の件数',extra['infections']),('最新の感染日',(extra['compromised_dates'] or ['—'])[-1]),('感染した端末にあった社内サービスの認証情報の数',extra['corporate_services']),('個人向けサービスの認証情報の数',extra['user_services'])]))
-        parts.append('<p>'+esc('／'.join(NAMES[p]+': '+states_labels[states[p]] for p in args.providers))+'</p>')
-        parts.append('</section>')
-    parts.append('<h2>検出なしのアドレス</h2><p>次の照会先では見つからなかった。照会していない照会先に流出が載っている可能性は残る</p>')
+            parts.append('##### インフォスティーラー\n\n'+pairs([('感染の記録の件数',extra['infections']),('最新の感染日',(extra['compromised_dates'] or ['—'])[-1]),('感染した端末にあった社内サービスの認証情報の数',extra['corporate_services']),('個人向けサービスの認証情報の数',extra['user_services'])]))
+        parts.append(esc('／'.join(NAMES[p]+': '+states_labels[states[p]] for p in args.providers))+'\n\n')
+    parts.append('## 検出なしのアドレス\n\n次の照会先では見つからなかった。照会していない照会先に流出が載っている可能性は残る\n\n')
     none=[r for r in summaries if r['risk']=='none']
     if none:
-        parts.append('<table><thead><tr><th>アドレス</th><th>照会した照会先</th></tr></thead><tbody>')
-        for r in none:
-            parts.append(f'<tr class="addr" data-risk="none"><td>{esc(r["email"])}</td><td>{esc("、".join(NAMES[p] for p in r["providers_ok"].split()))}</td></tr>')
-        parts.append('</tbody></table>')
-    else: parts.append('<p>なし</p>')
-    parts += ['<h2>調査の条件</h2>', pairs([('実行の種類', 'キャッシュのみ' if args.report_only else '通常'), ('直近とみなす期間', f'{cutoff} 以降'), ('照会しなかった照会先', '／'.join(NAMES[p]+': '+notes[p][0].removeprefix('スキップ: ') for p in args.providers if p not in active) or '—')]), provider_table]
+        parts.append(table(['アドレス', '照会した照会先'],
+                           [[r['email'], '、'.join(NAMES[p] for p in r['providers_ok'].split())]
+                            for r in none]))
+    else: parts.append('なし')
+    parts += ['## 調査の条件\n\n', pairs([('実行の種類', 'キャッシュのみ' if args.report_only else '通常'), ('直近とみなす期間', f'{cutoff} 以降'), ('照会しなかった照会先', '／'.join(NAMES[p]+': '+notes[p][0].removeprefix('スキップ: ') for p in args.providers if p not in active) or '—')]), provider_table]
     conditions=['感染の記録がある、または判定対象に情報窃取マルウェア由来の流出元がある','パスワードを含む（可能性・不明を含む）、直近の判定対象の流出元がある','パスワードを含む（可能性・不明を含む）判定対象の流出元がある','流出元がある（作られたデータの疑いを含む）','流出元がなく、有効な照会先すべてで照会済み','流出元がなく、有効な照会先に照会済みでないものがある']
-    parts+=['<h3>区分の決め方</h3><p>上から順に最初に当てはまった区分にします。直近は基準日以降の有効日（流出日と公開日の新しい方）で、日付不明も含みます。作られたデータの疑いがある流出元は判定対象から除きます。</p>',table(['区分','条件'],zip(RISKS.values(),conditions)),'<p class="notice">検出は侵害を意味しない。対応の詳細は事後対応の手順に従う</p><p class="notice">このファイルは個人情報を含む。共有の範囲に注意する</p>']
-    if 'leakcheck' in active: parts.append('<p><a href="https://leakcheck.io">Powered by LeakCheck</a></p>')
-    parts.append('</main></body></html>')
-    return '\n'.join(parts)
+    parts+=['### 区分の決め方\n\n上から順に最初に当てはまった区分にします。直近は基準日以降の有効日（流出日と公開日の新しい方）で、日付不明も含みます。作られたデータの疑いがある流出元は判定対象から除きます。\n\n',table(['区分','条件'],zip(RISKS.values(),conditions)),'検出は侵害を意味しない。対応の詳細は事後対応の手順に従う\n\nこのファイルは個人情報を含む。共有の範囲に注意する\n\n']
+    if 'leakcheck' in active: parts.append('[Powered by LeakCheck](https://leakcheck.io)')
+    return '\n\n'.join(part.strip() for part in parts) + '\n'
 
 
 def json_text(value):
@@ -1155,7 +1144,7 @@ def execute(args, current, today):
         summaries, findings, details = build_rows(args, emails, active, cache, cutoff)
         contents = [('summary.csv', csv_text(SUMMARY, summaries), 'utf-8-sig'),
                     ('findings.csv', csv_text(FINDINGS, findings), 'utf-8-sig'),
-                    ('report.html', render_html(args, summaries, details, active, cache, notes, current, cutoff, previous_comparison(outdir, current, findings, active)), 'utf-8')]
+                    ('report.md', render_markdown(args, summaries, details, active, cache, notes, current, cutoff, previous_comparison(outdir, current, findings, active)), 'utf-8')]
         counts = collections.Counter(r['risk'] for r in summaries)
         partial = sum(r['coverage'] == 'partial' for r in summaries)
         code = 130 if interrupted else 3 if partial else 0
@@ -1181,7 +1170,7 @@ def execute(args, current, today):
         output_interrupted, record_path = write_outputs(
             outdir, contents, {'results.jsonl': '\n'.join(result_lines) + '\n', 'run.json': run}, current, args, summaries, details)
         interrupted = output_interrupted or interrupted
-        for name in ('cache.sqlite', 'history.csv', 'summary.csv', 'findings.csv', 'report.html'):
+        for name in ('cache.sqlite', 'history.csv', 'summary.csv', 'findings.csv', 'report.md'):
             path = outdir / name
             if path.exists():
                 path.chmod(0o600)
@@ -1190,7 +1179,7 @@ def execute(args, current, today):
         code = 130 if interrupted else 3 if partial else 0
         log(str(outdir / 'history.csv'))
         log(' ／ '.join(f'{label}: {counts[risk]}' for risk, label in RISKS.items()) + f' ／ 照会できなかった照会先があるアドレス: {partial}')
-        for name in ('summary.csv', 'findings.csv', 'report.html'):
+        for name in ('summary.csv', 'findings.csv', 'report.md'):
             log(str(outdir / name))
         log(str(record_path))
         log(f'終了コード: {code}')

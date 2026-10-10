@@ -1,8 +1,7 @@
-"""SPEC v0.24 §14: acceptance checks through the public injection points."""
+"""SPEC v0.25 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
-from html.parser import HTMLParser
 import io
 import http.client
 import sys
@@ -21,9 +20,6 @@ import email_breach_audit as audit
 UTC_NOW = dt.datetime(2026, 10, 10, 3, 15, tzinfo=dt.timezone.utc)
 
 
-def date_html(text):
-    year, _, rest = text.partition('年')
-    return '<span class="date"><span>'+year+'年</span>' + ('<wbr><span>'+rest+'</span>' if rest else '') + '</span>'
 SCHEMA = ('CREATE TABLE results(provider TEXT, email TEXT, status TEXT, data TEXT, '
           'fetched_at TEXT, schema_version INTEGER, PRIMARY KEY(provider,email))')
 
@@ -42,14 +38,42 @@ def record(sources=None, extra=None):
     return dict(found=bool(sources or extra), sources=sources or [], extra=extra if extra is not None else {'fields': [], 'password_field': False})
 
 
-class AddressCounter(HTMLParser):
-    def __init__(self):
-        super().__init__()
-        self.count = 0
+def markdown_cells(line):
+    # Consume escaped characters before treating a pipe as a column separator.
+    cells, cell = [], []
+    index = 1
+    while index < len(line) - 1:
+        char = line[index]
+        if char == '\\' and index + 1 < len(line) - 1:
+            index += 1
+            cell.append(line[index])
+        elif char == '|':
+            cells.append(''.join(cell).strip())
+            cell = []
+        else:
+            cell.append(char)
+        index += 1
+    cells.append(''.join(cell).strip())
+    return cells
 
-    def handle_starttag(self, tag, attrs):
-        if tag in ('tr', 'section') and 'addr' in dict(attrs).get('class', '').split():
-            self.count += 1
+
+class MarkdownReport:
+    def __init__(self, text):
+        self.tables = []
+        table = None
+        for line in text.splitlines():
+            if line.startswith('| ') and line.endswith(' |'):
+                if table is None:
+                    table = []
+                    self.tables.append(table)
+                cells = markdown_cells(line)
+                if not all(re.fullmatch(r':?-+:?', cell) for cell in cells):
+                    table.append(cells)
+            else:
+                table = None
+        self.sections = [section.split('\n## ', 1)[0].split('\n### ', 1)[0]
+                         for section in text.split('\n#### ')[1:]]
+        self.text = re.sub(r'\\([\\|*_`\[\]<>#])', r'\1', text)
 
 
 class AcceptanceTests(unittest.TestCase):
@@ -92,8 +116,8 @@ class AcceptanceTests(unittest.TestCase):
         with (self.out / name).open(encoding='utf-8-sig', newline='') as stream:
             return list(csv.DictReader(stream))
 
-    def html(self):
-        return (self.out / 'report.html').read_text(encoding='utf-8')
+    def markdown(self):
+        return (self.out / 'report.md').read_text(encoding='utf-8')
 
     def seed(self, rows):
         self.out.mkdir(exist_ok=True)
@@ -108,9 +132,9 @@ class AcceptanceTests(unittest.TestCase):
         self.input.write_text(''.join(f'user{i}@example.com\n' for i in range(300)))
         self.assertEqual(self.run_audit(lambda url, *_: reply({'success': True, 'sources': [] if int(url.split('user')[1].split('%40')[0]) % 2 else [{'name': 'Example source'}]})), 0)
         self.assertEqual(len(self.rows()), 300)
-        parser = AddressCounter()
-        parser.feed(self.html())
-        self.assertEqual(parser.count, 300)
+        report = MarkdownReport(self.markdown())
+        address_table = next(t for t in report.tables if t[0] == ['アドレス', '照会した照会先'])
+        self.assertEqual(len(report.sections) + len(address_table) - 1, 300)
 
     def test_a02_input_statistics(self):
         self.input.write_text('\ufeff # comment\r\nA@example.com,a@example.com\r'
@@ -132,7 +156,7 @@ class AcceptanceTests(unittest.TestCase):
                 raise KeyboardInterrupt
             return reply({'success': True, 'sources': []})
         self.assertEqual(self.run_audit(first), 130)
-        self.assertIn('中断（5 件中 3 件を完了）', self.html())
+        self.assertIn('中断（5 件中 3 件を完了）', self.markdown())
         self.calls.clear()
         self.assertEqual(self.run_audit(), 3)
         self.assertEqual(self.calls, [f'https://leakcheck.io/api/public?check={name}%40example.com'
@@ -141,7 +165,7 @@ class AcceptanceTests(unittest.TestCase):
     def test_a04_missing_hibp_key_skips_only_hibp(self):
         self.assertEqual(self.run_audit(providers='hibp,leakcheck'), 0)
         self.assertEqual(self.rows()[0]['providers_skipped'], 'hibp')
-        self.assertIn('スキップ: HIBP_API_KEY が未設定', self.html())
+        self.assertIn(r'スキップ: HIBP\_API\_KEY が未設定', self.markdown())
         self.assertEqual(len(self.calls), 1)
 
     def test_a05_no_active_provider_creates_no_directory(self):
@@ -185,7 +209,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(len(findings), 2)
         self.assertEqual({r['breach']: r['providers'] for r in findings},
                          {'Twitter': 'hibp leakcheck', 'Twitter (200M)': 'hibp'})
-        self.assertIn('<td>'+date_html('2022年01月01日')+'</td>', self.html())
+        self.assertIn('| '+'2022年01月01日'+' |', self.markdown())
 
     def test_a09_risk_categories_and_boundaries(self):
         cases = [
@@ -277,12 +301,34 @@ class AcceptanceTests(unittest.TestCase):
         self.assertIn('[leakcheck] 1/2 taro@example.com: なし', self.stderr)
         self.assertIn('[leakcheck] 2/2 ab@example.org: なし', self.stderr)
 
-    def test_a14_html_escape_and_csv_formula_guard(self):
+    def test_a14_markdown_escape_and_csv_formula_guard(self):
         self.assertEqual(self.run_audit(lambda *_: reply({'success': True, 'sources': [
-            {'name': '<script>alert(1)</script>'}, {'name': '=1+1'}]})), 0)
-        self.assertIn('&lt;script&gt;alert(1)&lt;/script&gt;', self.html())
-        self.assertNotIn('<script>alert(1)</script>', self.html())
+            {'name': '<script>alert(1)</script>'}, {'name': '=1+1'}, {'name': 'a|b'}, {'name': '*x*'}]})), 0)
+        self.assertIn(r'\<script\>alert(1)\</script\>', self.markdown())
+        self.assertNotIn('<script>alert(1)</script>', self.markdown())
         self.assertIn("'=1+1", [r['breach'] for r in self.rows('findings.csv')])
+        self.assertIn(r'a\|b', self.markdown())
+        self.assertIn(r'\*x\*', self.markdown())
+        report = MarkdownReport(self.markdown())
+        for table in report.tables:
+            self.assertTrue(all(len(row) == len(table[0]) for row in table))
+        impact = next(t for t in report.tables if t[0][0] == '流出元')
+        self.assertEqual({row[0] for row in impact[1:]}, {'<script>alert(1)</script>', '=1+1', 'a|b', '*x*'})
+
+        # All ten reserved characters, all newline forms, and an address in a heading.
+        name = r'\|*_`[]<>#' + '\r\nfirst\rsecond\nthird'
+        self.input.write_text('a_b@example.com\n')
+        self.assertEqual(self.run_audit(lambda *_: reply({'success': True, 'sources': [
+            {'name': name}]}), options=['--refresh']), 0)
+        markup = self.markdown()
+        self.assertIn(r'\\\|\*\_\`\[\]\<\>\# first second third', markup)
+        self.assertIn(r'#### 高 a\_b@example.com', markup)
+        report = MarkdownReport(markup)
+        self.assertIsNone(re.search(r'(?<!\\)<[A-Za-z/]', markup))
+        for table in report.tables:
+            self.assertTrue(all(len(row) == len(table[0]) for row in table))
+        impact = next(t for t in report.tables if t[0][0] == '流出元')
+        self.assertEqual(impact[1][0], r'\|*_`[]<># first second third 新規')
 
     def test_a15_interruption_takes_priority_over_partial(self):
         self.assertEqual(self.run_audit(lambda *_: (_ for _ in ()).throw(KeyboardInterrupt())), 130)
@@ -314,13 +360,13 @@ class AcceptanceTests(unittest.TestCase):
         row = self.rows()[0]
         self.assertEqual(row['providers_ok'], 'hudsonrock')
         self.assertEqual(row['providers_not_queried'], 'leakcheck')
-        self.assertIn('停止: 内部エラー RuntimeError', self.html())
-        self.assertNotIn('DO_NOT_PRINT_RESPONSE', self.stderr + self.html())
+        self.assertIn('停止: 内部エラー RuntimeError', self.markdown())
+        self.assertNotIn('DO_NOT_PRINT_RESPONSE', self.stderr + self.markdown())
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.24', audit.__doc__)
-        self.assertIn('SPEC v0.24', __doc__)
+        self.assertIn('SPEC.md v0.25', audit.__doc__)
+        self.assertIn('SPEC v0.25', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -376,8 +422,8 @@ class AcceptanceTests(unittest.TestCase):
                         code = self.run_audit(http, providers='hibp', env={'HIBP_API_KEY': 'test-key'})
                 self.assertEqual(code, 130)
                 self.assertEqual(self.calls, [] if before_start else [audit.CATALOGS['hibp']])
-                self.assertIn('中断（照会前）', self.html())
-                self.assertNotIn('件を完了', self.html())
+                self.assertIn('中断（照会前）', self.markdown())
+                self.assertNotIn('件を完了', self.markdown())
 
     def test_output_interrupt_between_replacements_completes_all(self):
         self.assertEqual(self.run_audit(), 0)
@@ -400,7 +446,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual([r['アドレス'] for r in history], ['taro@example.com', 'new@example.com'])
         self.assertEqual(history[-1]['実行ID'], sorted((self.out/'runs').iterdir())[-1].name)
         self.assertEqual(history[-1]['流出元'], 'New breach')
-        self.assertIn('new@example.com', self.html())
+        self.assertIn('new@example.com', self.markdown())
         self.assertEqual(self.rows('findings.csv')[0]['email'], 'new@example.com')
         self.assertEqual(self.rows('findings.csv')[0]['breach'], 'New breach')
         self.assertFalse(list(self.out.glob('.*-*')))
@@ -475,12 +521,12 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(len(self.calls), 2)
         self.assertEqual(self.rows('findings.csv')[0]['catalog_miss'], 'true')
 
-    def test_html_section_order_static_document(self):
+    def test_markdown_section_order_static_document(self):
         self.assertEqual(self.run_audit(), 0)
-        markup = self.html()
-        markers = ['<h1>', '<h2>調査結果の数字', '<h2>流出元ごとの影響',
-                   '<h2>アドレスごとの対応',
-                   '<h2>検出なしのアドレス', '<tr class="addr"', '<h2>調査の条件',
+        markup = self.markdown()
+        markers = ['# ', '## 調査結果の数字', '## 流出元ごとの影響',
+                   '## アドレスごとの対応',
+                   '## 検出なしのアドレス', '| taro@example.com |', '## 調査の条件',
                    '検出は侵害を意味しない', '個人情報を含む', 'Powered by LeakCheck']
         positions = [markup.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
@@ -509,22 +555,13 @@ class AcceptanceTests(unittest.TestCase):
             seeds.append(('leakcheck', addresses[i], 'ok', record(sources, {'fields':['password'] if i == 6 else [], 'password_field':i == 6}), '2026-10-10T03:15:00Z', 3))
         self.seed(seeds)
         self.assertEqual(self.run_audit(options=['--report-only'], providers='hibp,leakcheck'), 3)
-        markup = self.html()
-        class TextParser(HTMLParser):
-            def __init__(self):
-                super().__init__(); self.hidden = 0; self.text = []; self.tags = []
-            def handle_starttag(self, tag, attrs):
-                self.tags.append(tag)
-                if tag in ('script','style'): self.hidden += 1
-            def handle_endtag(self, tag):
-                if tag in ('script','style'): self.hidden -= 1
-            def handle_data(self, data):
-                if not self.hidden: self.text.append(data)
-        parser = TextParser(); parser.feed(markup)
-        visible = ' '.join(parser.text)
-        for tag in ('details', 'script', 'button', 'input'):
-            self.assertNotIn(tag, parser.tags)
-        import re
+        markup = self.markdown()
+        report = MarkdownReport(markup)
+        visible = report.text
+        self.assertIsNone(re.search(r'(?<!\\)<[A-Za-z/]', markup))
+        for table in report.tables:
+            for row in table:
+                self.assertEqual(len(row), len(table[0]))
         forbidden = set(audit.SUMMARY + audit.FINDINGS + list(audit.RISKS) + list(audit.FLAGS) +
                         ['ok','error','not_queried','skipped','complete','partial','true','false','maybe',
                          'corporate_services','user_services','report-only'])
@@ -536,51 +573,43 @@ class AcceptanceTests(unittest.TestCase):
                 '未検証','マルウェア関連','照会先の一覧に詳細なし',
                 '日付不明（直近として扱う）','はい','いいえ', 'Unmapped information'] + list(audit.DATA_LABELS.values()):
             self.assertIn(label, visible)
-        self.assertEqual(markup.count('<section class="addr"'), 7)
-        self.assertEqual(markup.count('<tr class="addr"'), 1)
-        self.assertIn('@page{size:A4 portrait', markup)
-        self.assertIn('@media(prefers-color-scheme:dark)', markup)
-        self.assertIn('section.addr{padding:10px;break-inside:avoid}', markup)
-        self.assertIn('thead{display:table-header-group}', markup)
-        self.assertNotIn('data-search', markup)
-        self.assertNotIn('data-filter', markup)
+        self.assertEqual(len(report.sections), 7)
+        self.assertEqual(len(next(t for t in report.tables if t[0] == ['アドレス', '照会した照会先'])) - 1, 1)
 
-    def test_html_print_does_not_force_page_breaks(self):
+    def test_markdown_utf8_lf_and_heading_hierarchy(self):
         self.assertEqual(self.run_audit(), 0)
-        markup = self.html()
-        import re
-        self.assertIsNone(re.search(r'(?:page-)?break-(?:before|after)\s*:\s*(?:page|always|left|right|recto|verso)', markup))
-        self.assertIn('section.addr{padding:10px;break-inside:avoid}', markup)
+        raw = (self.out / 'report.md').read_bytes()
+        self.assertFalse(raw.startswith(b'\xef\xbb\xbf'))
+        self.assertNotIn(b'\r', raw)
+        headings = [line for line in raw.decode('utf-8').splitlines() if line.startswith('#')]
+        self.assertEqual(headings[0], '# メールアドレス流出調査レポート')
+        self.assertTrue(all(re.match(r'#{1,5} ', line) for line in headings))
+        self.assertIn('[Powered by LeakCheck](https://leakcheck.io)', raw.decode('utf-8'))
 
-    def test_html_pair_tables_use_equal_font_sizes_and_45_percent_labels(self):
+    def test_markdown_pair_tables_have_gfm_headers(self):
         self.assertEqual(self.run_audit(), 0)
-        markup = self.html()
-        self.assertIn('.overview th{width:45%}', markup)
-        self.assertIn('.overview th,.overview td{font-size:inherit}', markup)
-        self.assertNotIn('font-size:19px', markup)
-        self.assertIn('<h2>調査結果の数字</h2>\n<table class="overview">', markup)
-        self.assertIn('<h2>調査の条件</h2>\n<table class="overview">', markup)
+        markup = self.markdown()
+        for heading in ('調査結果の数字', '調査の条件'):
+            self.assertIn('## '+heading+'\n\n| 項目 | 値 |\n| --- | --- |', markup)
 
-    def test_html_dates_japanese_without_sources(self):
+    def test_markdown_dates_japanese_without_sources(self):
         items = [source(name='Day', date='2025-01-02', precision='day', added='2025-02-03'),
                  source(name='Month', date='2024-03', precision='month'),
                  source(name='Year', date='2020', precision='year'), source(name='Undated')]
         self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3)])
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
-        markup = self.html()
-        self.assertIn('.date>span{white-space:nowrap}', markup)
-        self.assertNotIn('.date{white-space:nowrap}', markup)
+        markup = self.markdown()
         for day in ('2025年01月02日', '2025年02月03日', '2024年03月', '2020年'):
-            self.assertIn('<td>'+date_html(day)+'</td>', markup)
+            self.assertIn('| '+day+' |', markup)
         self.assertNotIn('<br>（', markup)
         self.assertNotIn('出どころ', markup)
-        self.assertIn(date_html('2023年10月10日')+' 以降', markup)
+        self.assertIn('2023年10月10日'+' 以降', markup)
         stamp = audit.local_time(UTC_NOW)
         self.assertRegex(stamp, r'^\d{4}年\d{2}月\d{2}日 \d{2}:\d{2}$')
-        self.assertIn(date_html(stamp[:11])+stamp[11:], markup)
+        self.assertIn(stamp[:11]+stamp[11:], markup)
         self.assertNotIn('UTC', markup)
 
-    def test_html_zero_infections_use_single_line_and_positive_use_table(self):
+    def test_markdown_zero_infections_use_single_line_and_positive_use_table(self):
         self.input.write_text('zero@example.com\none@example.com')
         seeds = []
         for email, count in [('zero@example.com', 0), ('one@example.com', 1)]:
@@ -589,20 +618,20 @@ class AcceptanceTests(unittest.TestCase):
                       ('leakcheck', email, 'ok', record([source(password=False)]), '2026-10-10T03:15:00Z', 3)]
         self.seed(seeds)
         self.assertEqual(self.run_audit(options=['--report-only'], providers='leakcheck,hudsonrock'), 0)
-        markup = self.html()
-        zero = next(section for section in markup.split('<section class="addr"') if '低 zero@example.com' in section)
-        one = next(section for section in markup.split('<section class="addr"') if '緊急 one@example.com' in section)
-        self.assertIn('<p>インフォスティーラー: 感染の記録なし（Hudson Rock Cavalier OSINT）</p>', zero)
+        markup = self.markdown()
+        zero = next(section for section in MarkdownReport(markup).sections if '低 zero@example.com' in section)
+        one = next(section for section in MarkdownReport(markup).sections if '緊急 one@example.com' in section)
+        self.assertIn('インフォスティーラー: 感染の記録なし（Hudson Rock Cavalier OSINT）', zero)
         self.assertNotIn('感染の記録の件数', zero)
-        self.assertIn('<h4>インフォスティーラー</h4><table class="overview">', one)
-        self.assertIn('<th scope="row">感染の記録の件数</th><td>1</td>', one)
-        self.assertIn('<th scope="row">最新の感染日</th><td>—</td>', one)
+        self.assertIn('##### インフォスティーラー\n\n| 項目 | 値 |', one)
+        self.assertIn('| 感染の記録の件数 | 1 |', one)
+        self.assertIn('| 最新の感染日 | — |', one)
 
-    def test_html_profile_photos_are_translated(self):
+    def test_markdown_profile_photos_are_translated(self):
         item = dict(source(password=False), data=['Profile photos', 'profile photos'])
         self.seed([('leakcheck', 'taro@example.com', 'ok', record([item]), '2026-10-10T03:15:00Z', 3)])
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
-        markup = self.html()
+        markup = self.markdown()
         self.assertEqual(markup.count('プロフィール写真'), 2)
         self.assertNotIn('Profile photos', markup)
         self.assertIn('profile photos', markup)
@@ -613,7 +642,7 @@ class AcceptanceTests(unittest.TestCase):
         runs = self.out / 'runs'
         first = next(runs.iterdir())
         snapshot = {p.name:p.read_bytes() for p in first.iterdir()}
-        self.assertEqual(set(snapshot), {'summary.csv','findings.csv','report.html','results.jsonl','run.json'})
+        self.assertEqual(set(snapshot), {'summary.csv','findings.csv','report.md','results.jsonl','run.json'})
         metadata = json.loads(snapshot['run.json'])
         self.assertEqual(list(metadata), ['tool_version','started_at','finished_at','mode','input_file','addresses','options','effective_providers','skipped_providers','provider_notes','risk_counts','partial','exit_code'])
         self.assertEqual(metadata, dict(tool_version=audit.__version__, started_at='2026-10-10T03:15:00Z',
@@ -630,7 +659,7 @@ class AcceptanceTests(unittest.TestCase):
             self.assertEqual(value, dict(email=['one@example.com','two@example.org'][index//2],provider=provider,
                 state='skipped' if provider=='hibp' else 'ok', fetched_at=None if provider=='hibp' else '2026-10-10T03:15:00Z',
                 queried_now=provider=='leakcheck',result=None if provider=='hibp' else record(),error=None))
-        for name in ('summary.csv','findings.csv','report.html'):
+        for name in ('summary.csv','findings.csv','report.md'):
             self.assertEqual(snapshot[name], (self.out/name).read_bytes())
         self.assertEqual(self.run_audit(options=['--report-only'],providers='hibp,leakcheck'), 0)
         self.assertEqual(len(list(runs.iterdir())), 2)
@@ -662,9 +691,9 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(metadata['exit_code'],130)
         self.assertEqual(metadata['partial'],2)
         self.assertEqual(metadata['provider_notes'], {'leakcheck':'中断（3 件中 2 件を完了）'})
-        self.assertIn('古い結果',self.html())
+        self.assertIn('古い結果',self.markdown())
 
-    def test_html_infection_table_and_critical_reasons(self):
+    def test_markdown_infection_table_and_critical_reasons(self):
         self.input.write_text('both@example.com\ninfection@example.com')
         infected = {'infections':2,'compromised_dates':['2025-01-02'],'corporate_services':3,'user_services':4}
         self.seed([('hudsonrock',email,'ok',record(extra=infected),'2026-10-10T03:15:00Z',3)
@@ -672,19 +701,19 @@ class AcceptanceTests(unittest.TestCase):
                   [('leakcheck','both@example.com','ok',record([source(flags=['stealer_log'])]),'2026-10-10T03:15:00Z',3),
                    ('leakcheck','infection@example.com','ok',record(),'2026-10-10T03:15:00Z',3)])
         self.assertEqual(self.run_audit(options=['--report-only'],providers='leakcheck,hudsonrock'),0)
-        markup=self.html()
+        markup=self.markdown()
         self.assertIn('インフォスティーラーの感染記録が 2 件ある。情報窃取マルウェア由来の流出元が 1 件ある',markup)
         self.assertEqual(markup.count('感染の記録の件数'),2)
         self.assertEqual(markup.count('感染した端末にあった社内サービスの認証情報の数'),2)
         self.assertIn('個人向けサービスの認証情報の数',markup)
-        self.assertIn(date_html('2025年01月02日'),markup)
-        self.assertEqual(markup.count('□ 端末管理者</td><td>本人が使う端末の感染の有無を調べる（感染の記録 2 件、最新の感染日 '+date_html('2025年01月02日')+'）'), 2)
-        self.assertEqual(markup.count('□ 端末管理者が指定した別の端末で、Example のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない'), 1)
-        infection_section = markup.split('<h3>緊急 infection@example.com</h3>', 1)[1].split('</section>', 1)[0]
-        self.assertNotIn(' のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない', infection_section)
-        self.assertEqual(markup.count('<h3>即時対応</h3>'), 1)
-        self.assertNotIn('<h3>順次対応</h3>', markup)
-        self.assertNotIn('<h3>急ぎ不要</h3>', markup)
+        self.assertIn('2025年01月02日',markup)
+        self.assertEqual(markup.count('□ 端末管理者 | 本人が使う端末の感染の有無を調べる（感染の記録 2 件、最新の感染日 '+'2025年01月02日'+'）'), 2)
+        self.assertEqual(markup.count('□ 端末管理者が指定した別の端末で、Example のパスワードを変更する | 変更した、またはそのサービスを使っていない'), 1)
+        infection_section = next(section for section in MarkdownReport(markup).sections if section.startswith('緊急 infection@example.com'))
+        self.assertNotIn(' のパスワードを変更する | 変更した、またはそのサービスを使っていない', infection_section)
+        self.assertEqual(markup.count('### 即時対応'), 1)
+        self.assertNotIn('### 順次対応', markup)
+        self.assertNotIn('### 急ぎ不要', markup)
         self.assertNotIn('corporate_services',markup)
         self.assertNotIn('user_services',markup)
 
@@ -755,7 +784,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertTrue(fired)
         latest = sorted((self.out/'runs').iterdir())[-1]
         self.assertEqual(json.loads((latest/'run.json').read_text())['exit_code'], 130)
-        for name in ('summary.csv','findings.csv','report.html'):
+        for name in ('summary.csv','findings.csv','report.md'):
             self.assertEqual((latest/name).read_bytes(), (self.out/name).read_bytes())
         self.assertEqual(self.rows()[0]['email'], 'new@example.com')
         history = self.rows('history.csv')
@@ -766,7 +795,7 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_interrupt_before_record_rename_keeps_previous_outputs(self):
         self.assertEqual(self.run_audit(), 0)
-        snapshot = {name:(self.out/name).read_bytes() for name in ('history.csv','summary.csv','findings.csv','report.html')}
+        snapshot = {name:(self.out/name).read_bytes() for name in ('history.csv','summary.csv','findings.csv','report.md')}
         self.input.write_text('new@example.com')
         real_json = audit.json_text
         def interrupt(value):
@@ -802,15 +831,15 @@ class AcceptanceTests(unittest.TestCase):
                  source(name='PassNew', date='2019-01-01', precision='day', password=True)]
         self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3)])
         self.run_audit(options=['--report-only'])
-        markup = self.html()
+        markup = self.markdown()
         expected = ['PassNew', 'PassOld', 'PassUndated', 'NoPassNew']
-        impact = markup[markup.index('<h2>流出元ごとの影響</h2>'):markup.index('<h2>アドレスごとの対応</h2>')]
-        evidence = markup[markup.index('<h4>根拠</h4>'):]
+        impact = markup[markup.index('## 流出元ごとの影響'):markup.index('## アドレスごとの対応')]
+        evidence = markup[markup.index('##### 根拠'):]
         for part in (impact, evidence):
-            positions = [part.index('<td>'+name) for name in expected]
+            positions = [part.index('| '+name) for name in expected]
             self.assertEqual(positions, sorted(positions))
         self.assertEqual(markup.count(audit.ORDER_NOTE), 2)
-        actions = markup[markup.index('<h4>本人が行うこと</h4>'):markup.index('<h4>根拠</h4>')]
+        actions = markup[markup.index('##### 本人が行うこと'):markup.index('##### 根拠')]
         positions = [actions.index('□ '+name+' のパスワードを変更する')
                      for name in ['PassNew', 'PassOld', 'PassUndated']]
         self.assertEqual(positions, sorted(positions))
@@ -830,29 +859,9 @@ class AcceptanceTests(unittest.TestCase):
             seeds.append(('leakcheck', email, status, value, '2026-10-10T03:15:00Z', 3))
         self.seed(seeds)
         self.assertEqual(self.run_audit(options=['--report-only']), 3)
-        class ReportParser(HTMLParser):
-            def __init__(self):
-                super().__init__(); self.hidden = 0; self.text = []; self.sections = []; self.section = None; self.tables = []; self.table = None; self.row = None; self.cell = None
-            def handle_starttag(self, tag, attrs):
-                if tag in ('script','style'): self.hidden += 1
-                if tag == 'section': self.section = []; self.sections.append(self.section)
-                if tag == 'table': self.table = []; self.tables.append(self.table)
-                if tag == 'tr': self.row = []
-                if tag in ('td','th'): self.cell = []
-            def handle_data(self, data):
-                if not self.hidden:
-                    self.text.append(data)
-                    if self.section is not None: self.section.append(data)
-                    if self.cell is not None: self.cell.append(data)
-            def handle_endtag(self, tag):
-                if tag in ('script','style'): self.hidden -= 1
-                if tag in ('td','th') and self.cell is not None: self.row.append(''.join(self.cell)); self.cell = None
-                if tag == 'tr' and self.row is not None: self.table.append(self.row); self.row = None
-                if tag == 'table': self.table = None
-                if tag == 'section': self.section = None
-        parser = ReportParser(); parser.feed(self.html())
-        visible = re.sub(r'年 (?=\d{2}月)', '年', ' '.join(parser.text))
-        self.assertEqual(parser.tables[0], [
+        parser = MarkdownReport(self.markdown())
+        visible = parser.text
+        self.assertEqual(parser.tables[0][1:], [
             ['調査したアドレス','6 件'], ['流出が見つかったアドレス','4 件（66.7%）'],
             ['パスワードを含む流出があったアドレス','2 件（33.3%）'],
             ['情報窃取マルウェアの記録があったアドレス','1 件'], ['見つかった流出元','3 件'],
@@ -863,7 +872,7 @@ class AcceptanceTests(unittest.TestCase):
             ['Shared','2025年01月01日','不明','含む','2','high@example.com、low@example.com'],
             ['Old','2000年','不明','含む','1','medium@example.com'],
             ['Stealer','不明','不明','含まない','1','critical@example.com']])
-        sections = [' '.join(section) for section in parser.sections]
+        sections = [' '.join(section.split()) for section in parser.sections]
         self.assertEqual([section.split()[0] for section in sections], ['緊急','高','中','判定不能','低'])
         classifications = ['即時対応','即時対応','順次対応','急ぎ不要','対応不要','順次対応']
         meanings = ['情報窃取マルウェアの記録がある', 'パスワードを含む、直近の流出がある',
@@ -878,11 +887,11 @@ class AcceptanceTests(unittest.TestCase):
                    '照会した照会先では見つからなかった']
         for label, reason in zip(['即時対応','順次対応','急ぎ不要','対応不要'], reasons):
             self.assertIn(label+': '+reason, visible)
-        markup = self.html()
-        markers = ['<h2>調査結果の数字', '<h2>流出元ごとの影響', '<h2>アドレスごとの対応',
-                   '<h3>即時対応</h3>', '緊急 critical@example.com', '高 high@example.com',
-                   '<h3>順次対応</h3>', '中 medium@example.com', '判定不能 unknown@example.com',
-                   '<h3>急ぎ不要</h3>', '低 low@example.com', '<h2>検出なしのアドレス', '<h2>調査の条件']
+        markup = self.markdown()
+        markers = ['## 調査結果の数字', '## 流出元ごとの影響', '## アドレスごとの対応',
+                   '### 即時対応', '緊急 critical@example.com', '高 high@example.com',
+                   '### 順次対応', '中 medium@example.com', '判定不能 unknown@example.com',
+                   '### 急ぎ不要', '低 low@example.com', '## 検出なしのアドレス', '## 調査の条件']
         positions = [markup.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
         expected_organization = [[['担当', '行うこと', '完了の条件'],
@@ -941,33 +950,33 @@ class AcceptanceTests(unittest.TestCase):
                 self.assertNotIn('本人が行うこと', section)
             else:
                 self.assertIn('本人が行うこと 対応責任者がこの表を本人に渡し、すべての行が完了するまで追う', section)
-        self.assertNotIn('<section class="addr" data-risk="none">', markup)
+        self.assertNotIn('#### 検出なし ', markup)
         self.assertNotIn('やること', markup)
         self.assertNotIn('本人に送る文面', markup)
         self.assertNotIn('今日中', markup)
         self.assertNotIn('営業日', markup)
         self.assertIn('2025年01月01日', visible)
         self.assertNotIn('（LeakCheck Public API）', visible)
-        self.assertIn('2023年10月10日  以降または日付不明のものが 1 件ある', visible)
-        self.assertIn('どれも  2023年10月10日  より前', visible)
+        self.assertIn('2023年10月10日 以降または日付不明のものが 1 件ある', visible)
+        self.assertIn('どれも 2023年10月10日 より前', visible)
 
     def test_a20_previous_record_comparison_and_new_marks(self):
         self.assertEqual(self.run_audit(lambda *_: reply({'success':True,'sources':[{'name':'Old'}]})), 0)
-        self.assertIn('前回の記録なし（初回）', self.html())
-        self.assertNotIn('class="new"', self.html())
+        self.assertIn('前回の記録なし（初回）', self.markdown())
+        self.assertNotIn('（新規）', self.markdown())
         self.assertEqual(self.run_audit(lambda *_: reply({'success':True,'sources':[{'name':'Old'}, {'name':'New'}]}), options=['--refresh'], providers='leakcheck,hudsonrock', env=None), 3)
         # Hudson Rock receives the same mock body, so has an error; effective providers still differ.
-        markup = self.html()
+        markup = self.markdown()
         self.assertIn('新しく流出が見つかったアドレス 1 件、新しい流出元の組み合わせ 1 件、見つからなくなった組み合わせ 0 件', markup)
         self.assertIn('照会先が前回と違うため、差には照会先の違いによるものを含む', markup)
-        self.assertIn('<td>New 新規</td>', markup)
-        self.assertEqual(markup.count('<td>New 新規</td>'), 2)
-        self.assertIn('<span class="new">新規</span></h3>', markup)
+        self.assertIn('| New 新規 |', markup)
+        self.assertEqual(markup.count('| New 新規 |'), 2)
+        self.assertIn('#### 高 taro@example.com（新規）', markup)
         latest = max((self.out/'runs').iterdir())
         (latest/'findings.csv').write_bytes(b'\xff')
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
-        self.assertIn('前回の記録なし（初回）', self.html())
-        self.assertNotIn('class="new"', self.html())
+        self.assertIn('前回の記録なし（初回）', self.markdown())
+        self.assertNotIn('（新規）', self.markdown())
 
     def test_a21_xon_added_date_is_ignored(self):
         def http(url, *_):
@@ -979,7 +988,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(finding['added_date'], '')
         self.assertEqual(finding['recent'], 'false')
         self.assertEqual(self.rows()[0]['risk'], 'medium')
-        self.assertIn('<td>'+date_html('2000年01月01日')+'</td>', self.html())
+        self.assertIn('| '+'2000年01月01日'+' |', self.markdown())
         with contextlib.closing(sqlite3.connect(self.out/'cache.sqlite')) as db:
             self.assertEqual(db.execute('SELECT schema_version FROM results').fetchone()[0], 3)
 
@@ -1000,7 +1009,7 @@ class AcceptanceTests(unittest.TestCase):
                 self.assertEqual(self.waits, waits)
                 self.assertEqual(len(self.calls), len(responses))
                 self.assertEqual(self.rows()[0]['providers_not_queried'], 'leakcheck')
-                self.assertIn('停止: 1 / 1 件目で上限に達した。時間をおいて再実行すると続きから進みます', self.html())
+                self.assertIn('停止: 1 / 1 件目で上限に達した。時間をおいて再実行すると続きから進みます', self.markdown())
                 with contextlib.closing(sqlite3.connect(self.out / 'cache.sqlite')) as db:
                     self.assertEqual(db.execute('SELECT count(*) FROM results').fetchone()[0], 0)
 
