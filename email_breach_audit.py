@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.28."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.29."""
 import argparse
 import calendar
 import collections

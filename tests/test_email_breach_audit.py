@@ -1,4 +1,4 @@
-"""SPEC v0.28 §14: acceptance checks through the public injection points."""
+"""SPEC v0.29 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -386,8 +386,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.28', audit.__doc__)
-        self.assertIn('SPEC v0.28', __doc__)
+        self.assertIn('SPEC.md v0.29', audit.__doc__)
+        self.assertIn('SPEC v0.29', __doc__)
 
     def test_review_fixes_dates_in_names_none_section_and_guard(self):
         self.input.write_text('taro@example.com')
