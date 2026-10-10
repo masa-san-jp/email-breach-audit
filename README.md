@@ -21,7 +21,7 @@
 | コマンドのオプションと環境変数 | [SPEC §11](SPEC.md#11-cli-仕様) |
 | 個人情報の扱い | [SPEC §12](SPEC.md#12-セキュリティとプライバシー) |
 
-検出は「侵害された」という意味ではない。検出後の判定と対応は、[事後対応の仕様](docs/post-investigation-response-design.md)に従う。
+検出の後の判定と対応は、[事後対応の仕様](docs/post-investigation-response-design.md)に従う。
 
 ## 作業する人へ
 
