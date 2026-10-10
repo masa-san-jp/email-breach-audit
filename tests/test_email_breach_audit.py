@@ -1,4 +1,4 @@
-"""SPEC v0.18 §14: acceptance checks through the public injection points."""
+"""SPEC v0.19 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -313,8 +313,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.18', audit.__doc__)
-        self.assertIn('SPEC v0.18', __doc__)
+        self.assertIn('SPEC.md v0.19', audit.__doc__)
+        self.assertIn('SPEC v0.19', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -720,6 +720,24 @@ class AcceptanceTests(unittest.TestCase):
             with self.subTest(expected=expected, first=first, second=second):
                 result = merged(first, second)
                 self.assertEqual((result['breach_date_source'],result['added_date_source']),expected)
+
+    def test_report_source_order_and_caption(self):
+        self.input.write_text('taro@example.com')
+        items = [source(name='NoPassNew', date='2026-01-01', precision='day', password=False),
+                 source(name='PassOld', date='2012-05-01', precision='day', password=True),
+                 source(name='PassUndated', password=True),
+                 source(name='PassNew', date='2019-01-01', precision='day', password=True)]
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3)])
+        self.run_audit(options=['--report-only'])
+        markup = self.html()
+        expected = ['PassNew', 'PassOld', 'PassUndated', 'NoPassNew']
+        impact = markup[markup.index('<h2>流出元ごとの影響</h2>'):markup.index('<h2>対応が必要なアドレス</h2>')]
+        evidence = markup[markup.index('<h4>根拠</h4>'):]
+        for part in (impact, evidence):
+            positions = [part.index('<td>'+name) for name in expected]
+            self.assertEqual(positions, sorted(positions))
+        self.assertEqual(markup.count(audit.ORDER_NOTE), 2)
+        self.assertIn('対象サービス: PassNew、PassOld、PassUndated）', markup)
 
     def test_a19_report_numbers_impacts_actions_and_request(self):
         addresses = [f'{risk}@example.com' for risk in audit.RISKS]

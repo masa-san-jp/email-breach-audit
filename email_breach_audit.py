@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.18."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.19."""
 import argparse
 import calendar
 import collections
@@ -757,6 +757,9 @@ def previous_comparison(outdir, current, findings, active):
     return text, added
 
 
+ORDER_NOTE = '並び順: パスワードを含むもの（可能性を含む）が先、その中は流出日の新しい順（日付が不明なものは最後）'
+
+
 def render_html(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
     def esc(value):
         escaped = html.escape(text_value(value), quote=True)
@@ -809,7 +812,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         day = compare_date(items[0]['breach_date'], items[0]['breach_date_precision'])
         label = name + (' 新規' if any((f['email'], name) in new_pairs for f in items) else '')
         if any('fabricated' in f['flags'].split('; ') for f in items): label += '（作られたデータの疑い）'
-        impacts.append((password is False, -len(addresses), -day.toordinal() if day else math.inf, name.lower(),
+        impacts.append((password is False, -day.toordinal() if day else math.inf, -len(addresses), name.lower(),
                         [label, items[0]['breach_date'] or '不明', data_word(v for f in items for v in f['data_classes'].split('; ') if v), password_word(password), len(addresses), '、'.join(addresses)]))
     total = len(summaries)
     def proportion(number):
@@ -827,7 +830,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         ('前回からの変化', change)]),
         table(['区分','件数','意味','対応の分類'], [[label,counts[risk],RISK_WORDS[risk][0],classifications[risk]] for risk,label in RISKS.items()]),
         ''.join('<p>'+esc(label+': '+reason)+'</p>' for label, reason in classification_reasons),
-        '<h2>流出元ごとの影響</h2>', table(['流出元','流出日','漏れた情報','パスワード','該当アドレス数','該当アドレス'], [item[-1] for item in sorted(impacts, key=lambda item: item[:4])], date_columns=(1,))]
+        '<h2>流出元ごとの影響</h2>', '<p>'+esc(ORDER_NOTE+'。流出日が同じなら、該当アドレスの多い順')+'</p>', table(['流出元','流出日','漏れた情報','パスワード','該当アドレス数','該当アドレス'], [item[-1] for item in sorted(impacts, key=lambda item: item[:4])], date_columns=(1,))]
     provider_rows=[]
     for provider in args.providers:
         used=[cache.usable(provider,r['email']) for r in summaries] if provider in active else []
@@ -857,6 +860,10 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         parts.append(f'<section class="addr" data-risk="{risk}"><h3>{esc(RISKS[risk]+" "+r["email"])}</h3><p>{esc(reason)}</p>')
         if any((r['email'], f['breach']) in new_pairs for f in findings):
             parts[-1] = parts[-1].replace('</h3>', ' <span class="new">新規</span></h3>')
+        def report_order(f):
+            day = compare_date(f['breach_date'], f['breach_date_precision'])
+            return (f['has_password'] is False, -day.toordinal() if day else math.inf, f['breach'].lower())
+        findings = sorted(findings, key=report_order)
         services = '、'.join(f['breach'] for f in findings if risk == 'low' or f['in_scope'] and f['has_password'] is not False) or 'なし（端末の調査を優先）'
         unavailable = '、'.join(NAMES[p] for p in args.providers if states[p] != 'ok')
         actions = []
@@ -887,6 +894,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
             rows.append([f['breach']+(' 新規' if (r['email'], f['breach']) in new_pairs else ''),
                          (f['breach_date'], f['breach_date_source']),
                          (f['added_date'], f['added_date_source']),('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
+        if rows: parts.append('<p>'+esc(ORDER_NOTE)+'</p>')
         if rows: parts.append(table(['流出元','流出日（出どころ）','公開日（出どころ）','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows,date_columns=(1,2)))
         if states.get('hudsonrock')=='ok' and extra['infections']==0:
             parts.append('<p>'+esc('インフォスティーラー: 感染の記録なし（'+NAMES['hudsonrock']+'）')+'</p>')
