@@ -21,11 +21,35 @@
 | コマンドのオプションと環境変数 | [SPEC §11](SPEC.md#11-cli-仕様) |
 | 個人情報の扱い | [SPEC §12](SPEC.md#12-セキュリティとプライバシー) |
 
-使い方（Python 3 の標準ライブラリだけで動く。オプションと環境変数は [SPEC §11](SPEC.md#11-cli-仕様)）:
+### 使い方
 
-```sh
-HIBP_API_KEY="$(cat ~/.config/email-breach-audit/hibp_api_key)" python3 email_breach_audit.py <アドレスの一覧のファイル>
-```
+必要なもの: Python 3.10 以上（標準ライブラリだけで動く。追加のインストールはない）。
+
+1. リポジトリを取得する。
+
+   ```sh
+   git clone https://github.com/masa-san-jp/email-breach-audit.git
+   cd email-breach-audit
+   ```
+
+2. HIBP の API キーを用意する（任意。ないと HIBP は照会されず、LeakCheck だけで調べる）。キーは [haveibeenpwned.com/API/Key](https://haveibeenpwned.com/API/Key) で買える（最も安いプランで足りる）。キーはクラウド同期されない場所に、自分だけが読める権限で置く。
+
+   ```sh
+   mkdir -p ~/.config/email-breach-audit
+   touch ~/.config/email-breach-audit/hibp_api_key
+   chmod 600 ~/.config/email-breach-audit/hibp_api_key
+   # このファイルにキーを 1 行で書いて保存する
+   ```
+
+3. 調べるアドレスの一覧をテキストファイルに書く（1 行に 1 件。CSV などからでも、アドレスの形の文字列を拾う。[SPEC §4](SPEC.md#4-入力仕様)）。個人情報なので、リポジトリの中には置かない。
+
+4. 実行する。
+
+   ```sh
+   HIBP_API_KEY="$(cat ~/.config/email-breach-audit/hibp_api_key)" python3 email_breach_audit.py ~/addresses.txt
+   ```
+
+   照会先を増やすときは `--providers hibp,leakcheck,xon` のように書く。試しに数件だけ調べるときは `--limit 3`。オプションと環境変数の一覧は [SPEC §11](SPEC.md#11-cli-仕様)。
 
 結果は `~/breach-check-output/` の `report.md`（読む用）、`summary.csv`・`findings.csv`（集計用）、`history.csv`（全実行の履歴）に出る（[SPEC §10](SPEC.md#10-出力仕様)）。
 
