@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.23."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.24."""
 import argparse
 import calendar
 import collections
@@ -794,10 +794,15 @@ ORDER_NOTE = '並び順: パスワードを含むもの（可能性を含む）�
 
 
 def render_html(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
+    def date_span(text):
+        year, _, rest = text.partition('年')
+        inner = '<span>'+year+'年</span>' + ('<wbr><span>'+rest+'</span>' if rest else '')
+        return '<span class="date">'+inner+'</span>'
+
     def esc(value):
         escaped = html.escape(text_value(value), quote=True)
         escaped = re.sub(r'(?<![0-9])(\d{4})-(\d{2})-(\d{2})(?![0-9])', r'\1年\2月\3日', escaped)
-        return re.sub(r'(?<![0-9])\d{4}年\d{2}月\d{2}日', lambda match: '<span class="date">'+match[0]+'</span>', escaped)
+        return re.sub(r'(?<![0-9])\d{4}年\d{2}月\d{2}日', lambda match: date_span(match[0]), escaped)
 
     def date_cell(value):
         day, provider = value if isinstance(value, tuple) else (value, '')
@@ -805,7 +810,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
             return '不明'
         if day == '不明':
             return '不明'
-        return '<span class="date">'+html.escape(jp_date(day), quote=True)+'</span>'
+        return date_span(html.escape(jp_date(day), quote=True))
     states_labels = dict(ok='照会済み', error='エラー', not_queried='未照会', skipped='照会しなかった')
     flag_labels = dict(stealer_log='情報窃取マルウェア由来', spam_list='スパム用リスト', fabricated='作られたデータの疑い（判定に使わない）', unverified='未検証', malware='マルウェア関連')
     def table(headers, rows, date_columns=()):
@@ -816,7 +821,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
     partial = sum(r['coverage'] == 'partial' for r in summaries)
     parts = ['<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>メールアドレス流出調査レポート</title>',
     '''<style>
-:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:45%}.overview th,.overview td{font-size:inherit}.date{white-space:nowrap}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
+:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:45%}.overview th,.overview td{font-size:inherit}.date>span{white-space:nowrap}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
 @media(prefers-color-scheme:dark){:root{--bg:#171d25;--paper:#202935;--ink:#e5ebf2;--line:#526070;--muted:#2d3948;--accent:#84bcec}section.addr h3{color:var(--ink)}}
 @page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}section.addr{padding:10px;break-inside:avoid}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3,h2+p{break-after:avoid}section.addr h3{color:black}a{color:black}table{width:100%}}
 </style></head><body><main>''', '<h1>メールアドレス流出調査レポート</h1>']

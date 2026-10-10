@@ -1,4 +1,4 @@
-"""SPEC v0.23 §14: acceptance checks through the public injection points."""
+"""SPEC v0.24 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -8,6 +8,7 @@ import http.client
 import sys
 import threading
 import json
+import re
 import os
 from pathlib import Path
 import sqlite3
@@ -18,6 +19,11 @@ from unittest.mock import patch
 import email_breach_audit as audit
 
 UTC_NOW = dt.datetime(2026, 10, 10, 3, 15, tzinfo=dt.timezone.utc)
+
+
+def date_html(text):
+    year, _, rest = text.partition('年')
+    return '<span class="date"><span>'+year+'年</span>' + ('<wbr><span>'+rest+'</span>' if rest else '') + '</span>'
 SCHEMA = ('CREATE TABLE results(provider TEXT, email TEXT, status TEXT, data TEXT, '
           'fetched_at TEXT, schema_version INTEGER, PRIMARY KEY(provider,email))')
 
@@ -179,7 +185,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(len(findings), 2)
         self.assertEqual({r['breach']: r['providers'] for r in findings},
                          {'Twitter': 'hibp leakcheck', 'Twitter (200M)': 'hibp'})
-        self.assertIn('<td><span class="date">2022年01月01日</span></td>', self.html())
+        self.assertIn('<td>'+date_html('2022年01月01日')+'</td>', self.html())
 
     def test_a09_risk_categories_and_boundaries(self):
         cases = [
@@ -313,8 +319,8 @@ class AcceptanceTests(unittest.TestCase):
 
 
     def test_spec_version_references_are_current(self):
-        self.assertIn('SPEC.md v0.23', audit.__doc__)
-        self.assertIn('SPEC v0.23', __doc__)
+        self.assertIn('SPEC.md v0.24', audit.__doc__)
+        self.assertIn('SPEC v0.24', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -562,15 +568,16 @@ class AcceptanceTests(unittest.TestCase):
         self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3)])
         self.assertEqual(self.run_audit(options=['--report-only']), 0)
         markup = self.html()
-        self.assertIn('.date{white-space:nowrap}', markup)
+        self.assertIn('.date>span{white-space:nowrap}', markup)
+        self.assertNotIn('.date{white-space:nowrap}', markup)
         for day in ('2025年01月02日', '2025年02月03日', '2024年03月', '2020年'):
-            self.assertIn('<td><span class="date">'+day+'</span></td>', markup)
+            self.assertIn('<td>'+date_html(day)+'</td>', markup)
         self.assertNotIn('<br>（', markup)
         self.assertNotIn('出どころ', markup)
-        self.assertIn('<span class="date">2023年10月10日</span> 以降', markup)
+        self.assertIn(date_html('2023年10月10日')+' 以降', markup)
         stamp = audit.local_time(UTC_NOW)
         self.assertRegex(stamp, r'^\d{4}年\d{2}月\d{2}日 \d{2}:\d{2}$')
-        self.assertIn('<span class="date">'+stamp[:11]+'</span>'+stamp[11:], markup)
+        self.assertIn(date_html(stamp[:11])+stamp[11:], markup)
         self.assertNotIn('UTC', markup)
 
     def test_html_zero_infections_use_single_line_and_positive_use_table(self):
@@ -670,8 +677,8 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(markup.count('感染の記録の件数'),2)
         self.assertEqual(markup.count('感染した端末にあった社内サービスの認証情報の数'),2)
         self.assertIn('個人向けサービスの認証情報の数',markup)
-        self.assertIn('2025年01月02日',markup)
-        self.assertEqual(markup.count('□ 端末管理者</td><td>本人が使う端末の感染の有無を調べる（感染の記録 2 件、最新の感染日 <span class="date">2025年01月02日</span>）'), 2)
+        self.assertIn(date_html('2025年01月02日'),markup)
+        self.assertEqual(markup.count('□ 端末管理者</td><td>本人が使う端末の感染の有無を調べる（感染の記録 2 件、最新の感染日 '+date_html('2025年01月02日')+'）'), 2)
         self.assertEqual(markup.count('□ 端末管理者が指定した別の端末で、Example のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない'), 1)
         infection_section = markup.split('<h3>緊急 infection@example.com</h3>', 1)[1].split('</section>', 1)[0]
         self.assertNotIn(' のパスワードを変更する</td><td>変更した、またはそのサービスを使っていない', infection_section)
@@ -844,7 +851,7 @@ class AcceptanceTests(unittest.TestCase):
                 if tag == 'table': self.table = None
                 if tag == 'section': self.section = None
         parser = ReportParser(); parser.feed(self.html())
-        visible = ' '.join(parser.text)
+        visible = re.sub(r'年 (?=\d{2}月)', '年', ' '.join(parser.text))
         self.assertEqual(parser.tables[0], [
             ['調査したアドレス','6 件'], ['流出が見つかったアドレス','4 件（66.7%）'],
             ['パスワードを含む流出があったアドレス','2 件（33.3%）'],
@@ -972,7 +979,7 @@ class AcceptanceTests(unittest.TestCase):
         self.assertEqual(finding['added_date'], '')
         self.assertEqual(finding['recent'], 'false')
         self.assertEqual(self.rows()[0]['risk'], 'medium')
-        self.assertIn('<td><span class="date">2000年01月01日</span></td>', self.html())
+        self.assertIn('<td>'+date_html('2000年01月01日')+'</td>', self.html())
         with contextlib.closing(sqlite3.connect(self.out/'cache.sqlite')) as db:
             self.assertEqual(db.execute('SELECT schema_version FROM results').fetchone()[0], 3)
 
