@@ -2,81 +2,30 @@
 
 組織が付与したメールアドレスの流出を調べて、その結果に応じた事後対応までを整理するリポジトリ。
 
-| 部分 | 内容 | 仕様（SSOT） | 状態 |
-|---|---|---|---|
-| 調査ツール | メールアドレスの一覧を複数の流出 DB でまとめて照合し、全件をリスク区分つきのレポートにする | [SPEC.md](SPEC.md) | 仕様策定中（未実装） |
-| 事後対応 | 調査結果を受けて、判定・封じ込め・復旧・再発防止を人が行う手順（Google Workspace / Microsoft 365） | [docs/post-investigation-response-design.md](docs/post-investigation-response-design.md) | v1.0 |
+| 部分 | 内容 | 仕様（SSOT） |
+|---|---|---|
+| 調査ツール | メールアドレスの一覧を複数の流出 DB でまとめて照合し、全件をリスク区分つきのレポートにする | [SPEC.md](SPEC.md) |
+| 事後対応 | 調査結果を受けて、判定・封じ込め・復旧・再発防止を人が行う手順（Google Workspace / Microsoft 365） | [docs/post-investigation-response-design.md](docs/post-investigation-response-design.md) |
 
-それぞれの仕様が、その範囲の唯一の正（SSOT）。調査ツールは仕様が承認されるまで実装しない。
+それぞれの仕様が、その範囲の唯一の正（SSOT）。版と状態は各仕様の冒頭にある。この README は入口で、値や規則は書かずに仕様の節へリンクする。
 
-実在のメールアドレス、調査結果、監査ログ、認証情報はリポジトリに置かない。組織が承認した、アクセス制限付きの保管先で管理する。
+## 調査ツール
 
-## 調査ツールがすること
-
-1. メールアドレスの一覧（300 件程度）を読み込む
-2. 複数の流出 DB に照会する
-3. 同じ流出元をまとめて、アドレスごとにリスクを判定する
-4. 全件のレポート（HTML）と集計用の CSV を出力する
-
-照会先、判定の規則、出力の形式は、すべて SPEC.md に書いてある。この README には繰り返し書かない。
-
-| 知りたいこと | SPEC.md |
+| 知りたいこと | 仕様の節 |
 |---|---|
-| 照会先の DB と各 API の仕様 | [§5 プロバイダ仕様](SPEC.md#5-プロバイダ仕様) |
-| リスク区分の決め方 | [§8.3 リスク判定](SPEC.md#83-リスク判定) |
-| 出力されるファイル | [§10 出力仕様](SPEC.md#10-出力仕様) |
-| コマンドのオプション | [§11 CLI 仕様](SPEC.md#11-cli-仕様) |
-| 個人情報の扱い | [§12 セキュリティとプライバシー](SPEC.md#12-セキュリティとプライバシー) |
+| 目的と範囲 | [SPEC §1](SPEC.md#1-目的) |
+| 使う前に守ること（権限・承認） | [SPEC §2](SPEC.md#2-前提と制約) |
+| 照会先の DB と各 API | [SPEC §5](SPEC.md#5-プロバイダ仕様) |
+| リスク区分の決め方 | [SPEC §8](SPEC.md#8-判定の規則) |
+| 出力されるファイルと出力先 | [SPEC §10](SPEC.md#10-出力仕様) |
+| コマンドのオプションと環境変数 | [SPEC §11](SPEC.md#11-cli-仕様) |
+| 個人情報の扱い | [SPEC §12](SPEC.md#12-セキュリティとプライバシー) |
 
-## 調査ツールを使う前に
+検出は「侵害された」という意味ではない。検出後の判定と対応は、[事後対応の仕様](docs/post-investigation-response-design.md)に従う。
 
-- **照会してよいのは、自分に権限のあるアドレスだけ。** 組織のアドレスを照会するときは、情報システム部門かセキュリティ責任者の承認を先に取る。
-- **検出は「侵害された」という意味ではない。** 外部サービスの流出と、業務アカウントへの侵害は分けて判定する。検出後の判定と対応は、[事後対応の仕様](docs/post-investigation-response-design.md)に従う。
-- **結果は個人情報になる。** 「誰のアドレスがどこで漏れたか」がわかるので、出力先と閲覧者を限る。既定の出力先は、クラウド同期フォルダの外（`~/breach-check-output/`）。
-- **このリポジトリは公開されている。** 実在のアドレスの一覧、出力物、API キーをコミットしない。
+## 作業する人へ
 
-## 調査ツールの使い方（実装後の予定）
-
-必要なもの: Python 3.10 以上（追加のパッケージは不要）
-
-```bash
-# HIBP を使う場合だけ（有料キー: https://haveibeenpwned.com/API/Key）
-export HIBP_API_KEY=xxxxxxxx
-export HIBP_RPM=10          # 契約プランの 1 分あたりリクエスト数
-
-# 試運転（先頭 5 件だけ）
-python3 email_breach_audit.py emails.csv --limit 5
-
-# 本番
-python3 email_breach_audit.py emails.csv
-```
-
-出力（既定は `~/breach-check-output/`）:
-
-| ファイル | 内容 |
-|---|---|
-| `report.html` | 全件のレポート。ブラウザで開く |
-| `summary.csv` | アドレスごとに 1 行 |
-| `findings.csv` | 流出元ごとに 1 行 |
-| `cache.sqlite` | 照会結果のキャッシュ。中断しても、再実行すれば続きから進む |
-
-## ドキュメント
-
-| ファイル | 役割 |
-|---|---|
-| [SPEC.md](SPEC.md) | 調査ツールの仕様（SSOT） |
-| [docs/post-investigation-response-design.md](docs/post-investigation-response-design.md) | 調査後の事後対応の仕様（SSOT） |
-| [AGENTS.md](AGENTS.md) | 作業する人・エージェント向けのルール |
-| README.md | この文書。概要と使い方 |
-
-## 仕様を変えるとき
-
-1. 該当する仕様を更新する（版を上げて、変更履歴に追記する）
-2. もう一方の仕様に影響しないか確かめる。特に、調査ツールのリスク区分と出力の列（SPEC §8.3・§10）は、事後対応の仕様 §5 が入力として使っている
-3. 必要なら、この README の該当箇所を直す
-4. コードとテストを仕様に合わせる
-
-コードと仕様が食い違ったら、正しいのは仕様。
+[AGENTS.md](AGENTS.md) を読んでから始める。仕様の変え方もそこに書いてある。
 
 ## ライセンス
 
@@ -84,4 +33,4 @@ python3 email_breach_audit.py emails.csv
 
 ## 謝辞
 
-照会先の一つとして [LeakCheck](https://leakcheck.io) の Public API を使う予定。
+照会先の一つとして [LeakCheck](https://leakcheck.io) の Public API を使う。
