@@ -1,4 +1,4 @@
-"""Email breach investigation tool; behavior is defined by SPEC.md v0.14."""
+"""Email breach investigation tool; behavior is defined by SPEC.md v0.16."""
 import argparse
 import calendar
 import collections
@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 
 __version__ = '0.1.0'
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 PROVIDERS = ('hibp', 'leakcheck', 'hudsonrock', 'xon')
 FLAGS = ('stealer_log', 'spam_list', 'fabricated', 'unverified', 'malware')
 def format_duration(seconds: float) -> str:
@@ -297,7 +297,7 @@ def normalize(provider, payload, catalog):
             else:
                 display = name
                 date, precision = date_value(item.get('breachedDate'), 'iso')
-                added = date_value(item.get('addedDate'), 'iso')[0]
+                added = ''
                 data = item.get('exposedData')
                 flags = ['unverified'] if item.get('verified') is False else []
             password = 'Passwords' in data if string_array(data) else None
@@ -572,7 +572,9 @@ def merged_sources(records):
                 if merge_key(source['name']) == merge_key(existing['name']) and provider not in existing['providers'] and (date is None or other is None or abs(date.year-other.year) <= 1):
                     candidates.append((abs((date-other).days) if date and other else math.inf, index, existing))
             if not candidates:
-                merged.append(dict(source, data=list(source['data']), flags=list(source['flags']), providers=[provider]))
+                merged.append(dict(source, data=list(source['data']), flags=list(source['flags']), providers=[provider],
+                                   breach_date_source=provider if source['breach_date'] else '',
+                                   added_date_source=provider if source['added_date'] else ''))
                 continue
             _, _, target = min(candidates, key=lambda item: item[:2])
             target['providers'].append(provider)
@@ -580,7 +582,10 @@ def merged_sources(records):
             new_precision = precision_order[source['breach_date_precision']]
             if new_precision > old_precision or new_precision == old_precision and date and date > compare_date(target['breach_date'], target['breach_date_precision']):
                 target['breach_date'], target['breach_date_precision'] = source['breach_date'], source['breach_date_precision']
-            target['added_date'] = max(target['added_date'], source['added_date'])
+                target['breach_date_source'] = provider
+            if source['added_date'] > target['added_date']:
+                target['added_date'] = source['added_date']
+                target['added_date_source'] = provider
             target['data'] = sorted(set(target['data']) | set(source['data']), key=lambda v: (v.lower(), v))
             target['flags'] = [f for f in FLAGS if f in target['flags'] or f in source['flags']]
             target['has_password'] = True if target['has_password'] is True or source['has_password'] is True else False if target['has_password'] is False or source['has_password'] is False else None
@@ -640,7 +645,8 @@ def build_rows(args, emails, active, cache, cutoff):
                            flags='; '.join(source['flags']), catalog_miss=source['catalog_miss'],
                            providers=' '.join(source['providers']), data_classes='; '.join(source['data']))
             findings.append(finding)
-            address_findings.append(finding)
+            address_findings.append(dict(finding, breach_date_source=source['breach_date_source'],
+                                         added_date_source=source['added_date_source']))
         details[email] = (extra, address_findings, states)
     return summaries, findings, details
 
@@ -708,11 +714,49 @@ RISK_WORDS = {'critical': ['情報窃取マルウェアの記録がある',
  'low': ['流出はあるが、パスワードを含まない',
          '流出元が <breaches> 件あるが、パスワードを含むものはない（作られたデータの疑いがあるものだけの場合を含む）',
          'アドレスの流出を確かめる（事後対応の仕様 §5）'],
- 'none': ['どの照会先でも見つからなかった', '（§10.5 の 6 の表に入るので、文は書かない）', 'なし'],
+ 'none': ['どの照会先でも見つからなかった', '（§10.5 の 5 の表に入るので、文は書かない）', 'なし'],
  'unknown': ['照会できなかった照会先があり、判断できない',
              '流出元は見つかっていないが、<照会状態が ok でない照会先の名称を `、` でつなぐ> で照会できていない',
              '時間をおいて再実行する。それまでは未確認として扱う（事後対応の仕様 §5 の R5）']}
-def render_html(args, summaries, details, active, cache, notes, current, cutoff):
+def previous_comparison(outdir, current, findings, active):
+    base = current.astimezone().strftime('%Y%m%d-%H%M%S')
+    runs = outdir / 'runs'
+    destination = base
+    suffix = 2
+    while (runs / destination).exists():
+        destination = f'{base}-{suffix}'
+        suffix += 1
+    previous = sorted(path for path in runs.iterdir() if path.is_dir() and not path.name.startswith('.tmp-') and path.name < destination) if runs.exists() else []
+    if not previous:
+        return '前回の記録なし（初回）', set()
+    path = previous[-1]
+    try:
+        with (path / 'findings.csv').open(encoding='utf-8-sig', newline='') as stream:
+            reader = csv.DictReader(stream)
+            if not {'email', 'breach'}.issubset(reader.fieldnames or []):
+                raise ValueError('missing columns')
+            old = {(row['email'], row['breach']) for row in reader}
+    except (OSError, UnicodeError, ValueError, csv.Error, KeyError):
+        return '前回の記録なし（初回）', set()
+    metadata = {}
+    try:
+        metadata = json.loads((path / 'run.json').read_text(encoding='utf-8'))
+        if not isinstance(metadata, dict): metadata = {}
+    except (OSError, UnicodeError, ValueError):
+        pass
+    try:
+        created = local_time(dt.datetime.fromisoformat(metadata['started_at'].replace('Z', '+00:00')))
+    except (KeyError, ValueError, TypeError, AttributeError):
+        created = path.name
+    new = {(f['email'], f['breach']) for f in findings}
+    added = new - old
+    text = f'前回（{created}）から: 新しく流出が見つかったアドレス {len({email for email, _ in added})} 件、新しい流出元の組み合わせ {len(added)} 件、見つからなくなった組み合わせ {len(old - new)} 件'
+    if 'effective_providers' in metadata and metadata['effective_providers'] != active:
+        text += '（照会先が前回と違うため、差には照会先の違いによるものを含む）'
+    return text, added
+
+
+def render_html(args, summaries, details, active, cache, notes, current, cutoff, comparison=None):
     esc = lambda value: html.escape(text_value(value), quote=True)
     states_labels = dict(ok='照会済み', error='エラー', not_queried='未照会', skipped='照会しなかった')
     flag_labels = dict(stealer_log='情報窃取マルウェア由来', spam_list='スパム用リスト', fabricated='作られたデータの疑い（判定に使わない）', unverified='未検証', malware='マルウェア関連')
@@ -724,12 +768,55 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff)
     partial = sum(r['coverage'] == 'partial' for r in summaries)
     parts = ['<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>メールアドレス流出調査レポート</title>',
     '''<style>
-:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:32%}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}button,input{font:inherit;padding:8px 12px;margin:4px;border:1px solid var(--line);border-radius:4px;background:var(--paper);color:var(--ink)}button[aria-pressed="true"]{outline:2px solid var(--accent)}input{max-width:100%}.notice{padding:12px;background:var(--muted)}
+:root{color-scheme:light dark;--bg:#f4f6f8;--paper:#fff;--ink:#202b38;--line:#c6ced7;--muted:#edf1f5;--accent:#245e92}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.7 system-ui,sans-serif}main{max-width:1200px;margin:auto;padding:32px}h1{font-size:28px}h2{margin-top:36px;border-bottom:2px solid var(--line);padding-bottom:8px}h3{overflow-wrap:anywhere}table{width:100%;border-collapse:collapse;margin:16px 0;background:var(--paper);table-layout:fixed}th,td{border:1px solid var(--line);padding:9px;vertical-align:top;text-align:left;overflow-wrap:anywhere}th{background:var(--muted);font-weight:600}.overview th{width:32%}.addr{background:var(--paper)}section.addr{padding:20px;margin:24px 0;border:1px solid var(--line);border-left:6px solid var(--accent)}[data-risk="critical"]{--accent:#b42332}[data-risk="high"]{--accent:#b65d00}[data-risk="medium"]{--accent:#806300}[data-risk="low"]{--accent:#245e92}[data-risk="unknown"]{--accent:#755197}section.addr h3{color:var(--accent)}.request{border:1px solid var(--line);padding:16px;white-space:pre-wrap}.new{font-size:12px;border:1px solid currentColor;padding:2px 6px}.overview td{font-size:19px;font-weight:600}.subtitle{color:var(--ink)}.notice{padding:12px;background:var(--muted)}
 @media(prefers-color-scheme:dark){:root{--bg:#171d25;--paper:#202935;--ink:#e5ebf2;--line:#526070;--muted:#2d3948;--accent:#84bcec}section.addr h3{color:var(--ink)}}
-@page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}.filters{display:none}.addr[hidden]{display:revert!important}section.addr{padding:10px;break-inside:auto}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3{break-after:avoid}a{color:black}table{width:100%}}
+@page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}section.addr{padding:10px;break-inside:avoid}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3{break-after:avoid}section.addr h3{color:black}a{color:black}table{width:100%}}
 </style></head><body><main>''', '<h1>メールアドレス流出調査レポート</h1>']
-    parts.append(pairs([('作成日時',local_time(current)),('対象のアドレス数',len(summaries)),('照会先','、'.join(NAMES[p] for p in active)),('照会しなかった照会先','／'.join(NAMES[p]+': '+notes[p][0].removeprefix('スキップ: ') for p in args.providers if p not in active) or 'なし'),('直近とみなす期間',f'{cutoff} 以降'),('実行の種類','キャッシュのみ' if args.report_only else '通常')]))
-    parts += ['<h2>結果の要約</h2>',table(['区分','件数','意味','最初にすること'],[[label,counts[risk],RISK_WORDS[risk][0],RISK_WORDS[risk][2]] for risk,label in RISKS.items()]),f'<p>照会できなかった照会先があるアドレス: {partial} 件</p>','<h2>照会先ごとの状況</h2>']
+    change, new_pairs = comparison or ('前回の記録なし（初回）', set())
+    classifications = {'critical': '即時対応', 'high': '即時対応', 'medium': '順次対応', 'unknown': '順次対応', 'low': '急ぎ不要', 'none': '対応不要'}
+    classification_reasons = [
+        ('即時対応', '漏れた情報が、今も不正ログインに使える可能性が高い。見つけたその日に手を打つ'),
+        ('順次対応', 'パスワードは古い流出だが、使い回していれば今も危険。または、照会できていない照会先がある。即時対応の後に、順に進める'),
+        ('急ぎ不要', 'パスワードは漏れていない。なりすましメールへの注意を伝えるだけでよい'),
+        ('対応不要', '照会した照会先では見つからなかった')]
+    order = ['critical', 'high', 'medium', 'unknown', 'low', 'none']
+    ordered = sorted(enumerate(summaries), key=lambda pair: (order.index(pair[1]['risk']), -pair[1]['breaches'], pair[0]))
+    groups = {}
+    for _, row in ordered:
+        for finding in details[row['email']][1]:
+            groups.setdefault(finding['breach'], []).append(finding)
+    def password_word(value):
+        return '含む' if value is True else '含まない' if value is False else '含む可能性あり' if value == 'maybe' else '不明（含むとして扱う）'
+    def data_word(values):
+        return '、'.join(DATA_LABELS.get(v, v) for v in sorted(set(values), key=lambda v: (v.lower(), v))) or '不明'
+    impacts = []
+    for name, items in groups.items():
+        values = [f['has_password'] for f in items]
+        password = True if True in values else False if False in values else 'maybe' if 'maybe' in values else None
+        if True not in values and 'maybe' in values: password = 'maybe'
+        addresses = list(dict.fromkeys(f['email'] for f in items))
+        day = compare_date(items[0]['breach_date'], items[0]['breach_date_precision'])
+        label = name + (' 新規' if any((f['email'], name) in new_pairs for f in items) else '')
+        if any('fabricated' in f['flags'].split('; ') for f in items): label += '（作られたデータの疑い）'
+        impacts.append((password is False, -len(addresses), -day.toordinal() if day else math.inf, name.lower(),
+                        [label, items[0]['breach_date'] or '不明', data_word(v for f in items for v in f['data_classes'].split('; ') if v), password_word(password), len(addresses), '、'.join(addresses)]))
+    total = len(summaries)
+    def proportion(number):
+        return f'{number} 件（{math.floor(number * 1000 / total + 0.5) / 10:.1f}%）'
+    parts.append('<p class="subtitle">'+esc(local_time(current)+f' 作成 ／ 対象 {total} 件')+'</p>')
+    parts += ['<h2>調査結果の数字</h2>', pairs([
+        ('調査したアドレス', f'{total} 件'),
+        ('流出が見つかったアドレス', proportion(sum(r['breaches'] > 0 for r in summaries))),
+        ('パスワードを含む流出があったアドレス', proportion(sum(r['password_breaches'] > 0 for r in summaries))),
+        ('情報窃取マルウェアの記録があったアドレス', f"{counts['critical']} 件"),
+        ('見つかった流出元', f'{len(groups)} 件'),
+        ('即時対応が必要なアドレス', f"{counts['critical'] + counts['high']} 件"),
+        ('順次対応が必要なアドレス', f"{counts['medium'] + counts['unknown']} 件"),
+        ('急ぎ不要のアドレス', f"{counts['low']} 件"),
+        ('前回からの変化', change)]),
+        table(['区分','件数','意味','対応の分類'], [[label,counts[risk],RISK_WORDS[risk][0],classifications[risk]] for risk,label in RISKS.items()]),
+        ''.join('<p>'+esc(label+': '+reason)+'</p>' for label, reason in classification_reasons),
+        '<h2>流出元ごとの影響</h2>', table(['流出元','流出日','漏れた情報','パスワード','該当アドレス数','該当アドレス'], [item[-1] for item in sorted(impacts, key=lambda item: item[:4])])]
     provider_rows=[]
     for provider in args.providers:
         used=[cache.usable(provider,r['email']) for r in summaries] if provider in active else []
@@ -737,13 +824,16 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff)
         times=sorted(dt.datetime.fromisoformat(r['fetched_at'].replace('Z','+00:00')) for r in used)
         span=local_time(times[0])+'〜'+local_time(times[-1]) if times else '—'
         provider_rows.append([NAMES[provider],CONFIRMATION[provider],*[sum(details[r['email']][2][provider]==state for r in summaries) for state in states_labels],span,sum(r['status']=='ok' and expired(r,current,args.max_age) for r in used),'／'.join(notes[provider]) or '—'])
-    parts.append(table(['照会先','確認の状態','照会済み','エラー','未照会','照会しなかった','結果の取得日時','古い結果','備考'],provider_rows))
-    parts.append('<div class="filters" role="group" aria-label="絞り込み">'+''.join(f'<button type="button" data-filter="{risk}" aria-pressed="false">{label}</button>' for risk,label in RISKS.items())+'<button type="button" data-filter="" aria-pressed="true">すべて</button><label>検索 <input id="search" type="search" placeholder="アドレス・流出元"></label></div><h2>アドレスごとの結果</h2>')
-    ordered=sorted(enumerate(summaries),key=lambda pair:(list(RISKS).index(pair[1]['risk']),-pair[1]['breaches'],pair[0]))
+    provider_table = table(['照会先','確認の状態','照会済み','エラー','未照会','照会しなかった','結果の取得日時','古い結果','備考'],provider_rows)
+    parts.append('<h2>対応が必要なアドレス</h2>')
+    previous_classification = None
     for _,r in ordered:
         if r['risk']=='none': continue
         extra,findings,states=details[r['email']]
         risk=r['risk']
+        if classifications[risk] != previous_classification:
+            parts.append('<h3>'+esc(classifications[risk])+'</h3>')
+            previous_classification = classifications[risk]
         reason=RISK_WORDS[risk][1]
         if risk=='critical':
             reason='。'.join(([f'インフォスティーラーの感染記録が {extra["infections"]} 件ある'] if extra.get('infections',0) else [])+([f'情報窃取マルウェア由来の流出元が {r["stealer_log_breaches"]} 件ある'] if r['stealer_log_breaches'] else []))
@@ -753,35 +843,57 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff)
             reason=reason.replace('<基準日>',str(cutoff))
             if risk=='unknown':
                 reason='流出元は見つかっていないが、'+'、'.join(NAMES[p] for p in args.providers if states[p]!='ok')+' で照会できていない'
-        parts.append(f'<section class="addr" data-risk="{risk}" data-search="{esc(r["email"]+" "+r["breach_names"])}"><h3>{esc(RISKS[risk]+" "+r["email"])}</h3><p>{esc(reason)}</p>')
-        parts.append(pairs([('流出元の数',r['breaches']),('パスワードを含む（可能性を含む）流出元の数',r['password_breaches']),('そのうち直近の数',r['recent_password_breaches']),('最新の流出日',r['latest_breach'] or '—'),('照会先ごとの照会状態','／'.join(NAMES[p]+': '+states_labels[states[p]] for p in args.providers))]))
-        if states.get('hudsonrock')=='ok':
-            parts.append('<h4>インフォスティーラー</h4>'+pairs([('感染の記録の件数',extra['infections']),('最新の感染日',(extra['compromised_dates'] or ['—'])[-1]),('感染した端末にあった社内サービスの認証情報の数',extra['corporate_services']),('個人向けサービスの認証情報の数',extra['user_services'])]))
+        parts.append(f'<section class="addr" data-risk="{risk}"><h3>{esc(RISKS[risk]+" "+r["email"])}</h3><p>{esc(reason)}</p>')
+        if any((r['email'], f['breach']) in new_pairs for f in findings):
+            parts[-1] = parts[-1].replace('</h3>', ' <span class="new">新規</span></h3>')
+        services = '、'.join(f['breach'] for f in findings if risk == 'low' or f['in_scope'] and f['has_password'] is not False) or 'なし（端末の調査を優先）'
+        unavailable = '、'.join(NAMES[p] for p in args.providers if states[p] != 'ok')
+        actions = []
+        if risk == 'critical':
+            infection = f"（感染の記録 {extra['infections']} 件、最新の感染日 {r['infostealer_latest'] or '—'}）" if extra.get('infections', 0) else ''
+            actions = [('端末管理者', 'このアドレスの利用者が使う端末を調べる'+infection),
+                       ('対応責任者', '本人に「端末調査の連絡」を送る'),
+                       ('ID・メール管理者', '会社のアカウントのセッションを失効させ、ログイン履歴、転送・フィルタの設定、認証方法、外部アプリの許可を確認する')]
+        elif risk in ('high', 'medium'):
+            actions = [('対応責任者', f'本人に「パスワード変更の依頼」を送る（対象サービス: {services}）'),
+                       ('ID・メール管理者', 'ログイン履歴、転送・フィルタの設定、認証方法を確認する'),
+                       ('ID・メール管理者', '本人から「会社のアカウントでも同じ・似たパスワードを使っていた」と連絡があったら、会社のパスワードを変更させ、セッションを失効させる')]
+        elif risk == 'low':
+            actions = [('対応責任者', f'本人に「なりすましメールへの注意」を送る（対象サービス: {services}）')]
+        elif risk == 'unknown':
+            actions = [('対応責任者', unavailable+' について、時間をおいてこのツールを再実行する')]
+        parts.append('<h4>やること</h4>'+table(['担当','内容'], [('□ '+owner, content) for owner,content in actions]))
+        if risk != 'unknown':
+            messages = {'critical': '外部の調査で、あなたが使う端末が情報を盗むマルウェアに感染していた可能性があるとわかりました（会社のメールアドレス <アドレス>）。会社の端末管理者が端末を調べます。それまで、その端末では新しいパスワードや認証コードを入力しないでください。パスワードの変更は、担当者が案内する安全な端末で行ってください。パスワード・認証コードは誰にも送らないでください。', 'high': '外部サービスの流出情報に、会社のメールアドレス（<アドレス>）が含まれていました。次のサービスのパスワードを、直ちに変更してください: <対象サービス>。同じ、または似たパスワードを会社のアカウントやほかのサービスで使っている場合は、それらもすべて直ちに変更してください。多要素認証を使えるサービスでは、有効にしてください。変更が終わったら、セキュリティ窓口に「変更した」ことと、「会社のアカウントで同じ・似たパスワードを使っていたか」を知らせてください。パスワード・認証コードは送らないでください。', 'low': '外部サービスの流出情報に、会社のメールアドレス（<アドレス>）が含まれていました（<対象サービス>）。パスワードは含まれていませんが、このアドレスを狙ったなりすましメールが届くおそれがあります。これらのサービスや会社を名乗るメールのリンクから、パスワードを入力しないでください。不審なメールは、セキュリティ窓口に転送してください。'}
+            message = messages['high' if risk == 'medium' else risk].replace('<アドレス>', r['email']).replace('<対象サービス>', services)
+            parts.append('<h4>本人に送る文面</h4><div class="request">'+esc(message)+'</div>')
+        parts.append('<h4>根拠</h4>')
         rows=[]
         for f in findings:
             caution=[flag_labels[flag] for flag in f['flags'].split('; ') if flag]
             if f['catalog_miss']: caution.append('照会先の一覧に詳細なし')
             password='含む' if f['has_password'] is True else '含まない' if f['has_password'] is False else '含む可能性あり' if f['has_password']=='maybe' else '不明（含むとして扱う）'
-            rows.append([f['breach'],f['breach_date'] or '不明',f['added_date'] or '不明',('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
-        if rows: parts.append(table(['流出元','流出日','公開日','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows))
+            rows.append([f['breach']+(' 新規' if (r['email'], f['breach']) in new_pairs else ''),
+                         (f['breach_date']+'（'+NAMES[f['breach_date_source']]+'）') if f['breach_date'] else '不明',
+                         (f['added_date']+'（'+NAMES[f['added_date_source']]+'）') if f['added_date'] else '不明',('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
+        if rows: parts.append(table(['流出元','流出日（出どころ）','公開日（出どころ）','直近か','漏れた情報','パスワード','注意','検出した照会先'],rows))
+        if states.get('hudsonrock')=='ok':
+            parts.append('<h4>インフォスティーラー</h4>'+pairs([('感染の記録の件数',extra['infections']),('最新の感染日',(extra['compromised_dates'] or ['—'])[-1]),('感染した端末にあった社内サービスの認証情報の数',extra['corporate_services']),('個人向けサービスの認証情報の数',extra['user_services'])]))
+        parts.append('<p>'+esc('／'.join(NAMES[p]+': '+states_labels[states[p]] for p in args.providers))+'</p>')
         parts.append('</section>')
-    parts.append('<h2>検出なしのアドレス</h2>')
+    parts.append('<h2>検出なしのアドレス</h2><p>次の照会先では見つからなかった。照会していない照会先に流出が載っている可能性は残る</p>')
     none=[r for r in summaries if r['risk']=='none']
     if none:
-        parts.append('<table><thead><tr><th>アドレス</th><th>照会先</th></tr></thead><tbody>')
+        parts.append('<table><thead><tr><th>アドレス</th><th>照会した照会先</th></tr></thead><tbody>')
         for r in none:
-            parts.append(f'<tr class="addr" data-risk="none" data-search="{esc(r["email"])}"><td>{esc(r["email"])}</td><td>{esc("、".join(NAMES[p] for p in r["providers_ok"].split()))}</td></tr>')
+            parts.append(f'<tr class="addr" data-risk="none"><td>{esc(r["email"])}</td><td>{esc("、".join(NAMES[p] for p in r["providers_ok"].split()))}</td></tr>')
         parts.append('</tbody></table>')
     else: parts.append('<p>なし</p>')
+    parts += ['<h2>調査の条件</h2>', pairs([('実行の種類', 'キャッシュのみ' if args.report_only else '通常'), ('直近とみなす期間', f'{cutoff} 以降'), ('照会しなかった照会先', '／'.join(NAMES[p]+': '+notes[p][0].removeprefix('スキップ: ') for p in args.providers if p not in active) or '—')]), provider_table]
     conditions=['感染の記録がある、または判定対象に情報窃取マルウェア由来の流出元がある','パスワードを含む（可能性・不明を含む）、直近の判定対象の流出元がある','パスワードを含む（可能性・不明を含む）判定対象の流出元がある','流出元がある（作られたデータの疑いを含む）','流出元がなく、有効な照会先すべてで照会済み','流出元がなく、有効な照会先に照会済みでないものがある']
-    parts+=['<h2>区分の決め方と注意</h2><p>上から順に最初に当てはまった区分にします。直近は基準日以降の有効日（流出日と公開日の新しい方）で、日付不明も含みます。作られたデータの疑いがある流出元は判定対象から除きます。</p>',table(['区分','条件'],zip(RISKS.values(),conditions)),'<p class="notice">検出は侵害を意味しない。対応は事後対応の手順に従う</p><p class="notice">このファイルは個人情報を含む。共有の範囲に注意する</p>']
+    parts+=['<h3>区分の決め方</h3><p>上から順に最初に当てはまった区分にします。直近は基準日以降の有効日（流出日と公開日の新しい方）で、日付不明も含みます。作られたデータの疑いがある流出元は判定対象から除きます。</p>',table(['区分','条件'],zip(RISKS.values(),conditions)),'<p class="notice">検出は侵害を意味しない。対応の詳細は事後対応の手順に従う</p><p class="notice">このファイルは個人情報を含む。共有の範囲に注意する</p>']
     if 'leakcheck' in active: parts.append('<p><a href="https://leakcheck.io">Powered by LeakCheck</a></p>')
-    parts.append('''</main><script>
-let selectedRisk = '';
-function filterRows(){const query=document.getElementById('search').value.toLowerCase();document.querySelectorAll('.addr').forEach(row=>{row.hidden=Boolean((selectedRisk && row.dataset.risk!==selectedRisk)||!row.dataset.search.toLowerCase().includes(query));});}
-document.getElementById('search').addEventListener('input',filterRows);
-document.querySelectorAll('[data-filter]').forEach(button=>button.addEventListener('click',()=>{selectedRisk=button.dataset.filter;document.querySelectorAll('[data-filter]').forEach(b=>b.setAttribute('aria-pressed',String(b===button)));filterRows();}));
-</script></body></html>''')
+    parts.append('</main></body></html>')
     return '\n'.join(parts)
 
 
@@ -927,7 +1039,7 @@ def execute(args, current, today):
         summaries, findings, details = build_rows(args, emails, active, cache, cutoff)
         contents = [('summary.csv', csv_text(SUMMARY, summaries), 'utf-8-sig'),
                     ('findings.csv', csv_text(FINDINGS, findings), 'utf-8-sig'),
-                    ('report.html', render_html(args, summaries, details, active, cache, notes, current, cutoff), 'utf-8')]
+                    ('report.html', render_html(args, summaries, details, active, cache, notes, current, cutoff, previous_comparison(outdir, current, findings, active)), 'utf-8')]
         counts = collections.Counter(r['risk'] for r in summaries)
         partial = sum(r['coverage'] == 'partial' for r in summaries)
         code = 130 if interrupted else 3 if partial else 0
