@@ -211,6 +211,21 @@ class AcceptanceTests(unittest.TestCase):
                          {'Twitter': 'hibp leakcheck', 'Twitter (200M)': 'hibp'})
         self.assertIn('| '+'2022年01月01日'+' |', self.markdown())
 
+    def test_a23_no_service_list_gets_all_services_action(self):
+        catalog = [dict(Name='Combo', Title='Combo List', Domain='', BreachDate='2025-04-11', DataClasses=['Passwords']),
+                   dict(Name='Shop', Title='Shop', Domain='shop.example', BreachDate='2019-01-01', DataClasses=['Passwords'])]
+        def http(url, *_):
+            if url.endswith('/breaches'):
+                return reply(catalog)
+            return reply([{'Name': 'Combo'}, {'Name': 'Shop'}])
+        self.assertEqual(self.run_audit(http, providers='hibp', env={'HIBP_API_KEY': 'test-marker-key'}), 0)
+        report = self.markdown()
+        self.assertIn('| □ Shop のパスワードを変更する |', report)
+        self.assertNotIn('Combo List のパスワードを変更する', report)
+        self.assertEqual(report.count('使っているすべてのサービスのパスワードを、それぞれ違うものに変更する（Combo List は特定のサービスではない一覧'), 1)
+        self.assertNotIn('上のサービスと同じ・似たパスワード', report)
+        self.assertIn('| 特定のサービスではない一覧 |', report)
+
     def test_a09_risk_categories_and_boundaries(self):
         cases = [
             ('critical', source(flags=['stealer_log'])),

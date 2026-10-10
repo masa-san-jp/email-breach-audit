@@ -4,6 +4,9 @@ breach-check-output/
 *.sqlite-journal
 *.csv
 report.html
+report.md
+runs/
+history*.csv
 
 # 実在のアドレスの一覧を置きがちな名前
 emails*.txt
