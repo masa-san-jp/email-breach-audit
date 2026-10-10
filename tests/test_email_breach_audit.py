@@ -1,4 +1,4 @@
-"""SPEC v0.19 §14: acceptance checks through the public injection points."""
+"""SPEC v0.20 §14: acceptance checks through the public injection points."""
 import contextlib
 import csv
 import datetime as dt
@@ -314,7 +314,7 @@ class AcceptanceTests(unittest.TestCase):
 
     def test_spec_version_references_are_current(self):
         self.assertIn('SPEC.md v0.19', audit.__doc__)
-        self.assertIn('SPEC v0.19', __doc__)
+        self.assertIn('SPEC v0.20', __doc__)
 
     def test_progress_duration_format(self):
         self.assertEqual(audit.format_duration(6.6000000000000005), '6.6 秒')
@@ -390,6 +390,10 @@ class AcceptanceTests(unittest.TestCase):
             sys.settrace(None)
         self.assertTrue(fired)
         self.assertEqual(self.rows()[0]['email'], 'new@example.com')
+        history = self.rows('history.csv')
+        self.assertEqual([r['アドレス'] for r in history], ['taro@example.com', 'new@example.com'])
+        self.assertEqual(history[-1]['実行ID'], sorted((self.out/'runs').iterdir())[-1].name)
+        self.assertEqual(history[-1]['流出元'], 'New breach')
         self.assertIn('new@example.com', self.html())
         self.assertEqual(self.rows('findings.csv')[0]['email'], 'new@example.com')
         self.assertEqual(self.rows('findings.csv')[0]['breach'], 'New breach')
@@ -671,6 +675,58 @@ class AcceptanceTests(unittest.TestCase):
         self.assertNotIn('corporate_services',markup)
         self.assertNotIn('user_services',markup)
 
+    def test_a22_history_append_format_and_rows(self):
+        self.input.write_text('taro@example.com\nnone@example.org')
+        items = [source(name='NoPass', date='2026-01-01', precision='day', password=False),
+                 source(name='=Old', date='2012-05', precision='month', password=True),
+                 source(name='Undated', password=None)]
+        self.seed([('leakcheck', 'taro@example.com', 'ok', record(items), '2026-10-10T03:15:00Z', 3),
+                   ('leakcheck', 'none@example.org', 'ok', record(), '2026-10-10T03:15:00Z', 3)])
+        self.assertEqual(self.run_audit(), 0)
+        path = self.out / 'history.csv'
+        first = path.read_bytes()
+        header = ['実行日時', '実行ID', '実行の種類', 'アドレス', '区分', '対応の分類',
+                  '流出元', '流出日', 'パスワード', '検出した照会先', '照会した照会先']
+        with path.open(encoding='utf-8-sig', newline='') as stream:
+            self.assertEqual(next(csv.reader(stream)), header)
+        rows = self.rows('history.csv')
+        run_id = next((self.out/'runs').iterdir()).name
+        prefix = [UTC_NOW.astimezone().strftime('%Y-%m-%d %H:%M'), run_id, '通常',
+                  'taro@example.com', '高', '即時対応']
+        provider = audit.NAMES['leakcheck']
+        self.assertEqual([list(r.values()) for r in rows], [
+            prefix + ["'=Old", '2012-05', '含む', provider, provider],
+            prefix + ['Undated', '不明', '不明（含むとして扱う）', provider, provider],
+            prefix + ['NoPass', '2026-01-01', '含まない', provider, provider],
+            [prefix[0], run_id, '通常', 'none@example.org', '検出なし', '対応不要',
+             '（なし）', '', '', '', provider]])
+        self.assertEqual(self.run_audit(options=['--report-only']), 0)
+        data = path.read_bytes()
+        self.assertTrue(data.startswith(first))
+        self.assertEqual(data.count(b'\xef\xbb\xbf'), 1)
+        self.assertEqual(data.decode('utf-8-sig').count(','.join(header)), 1)
+        self.assertNotIn(b'\n', data.replace(b'\r\n', b''))
+        appended = self.rows('history.csv')[4:]
+        self.assertEqual(len(appended), 4)
+        self.assertTrue(all(r['実行ID'] == run_id+'-2' and r['実行の種類'] == 'キャッシュのみ' for r in appended))
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertIn(str(path), self.stderr)
+
+    def test_a22_history_incompatible_header_retained(self):
+        self.assertEqual(self.run_audit(), 0)
+        path = self.out/'history.csv'
+        old = b'\xef\xbb\xbfprevious,columns\r\nkept,unchanged\r\n'
+        path.write_bytes(old)
+        path.chmod(0o644)
+        self.assertEqual(self.run_audit(options=['--report-only']), 0)
+        latest = sorted((self.out/'runs').iterdir())[-1]
+        backup = self.out / f'history-{latest.name}.old.csv'
+        self.assertEqual(backup.read_bytes(), old)
+        self.assertEqual(backup.stat().st_mode & 0o777, 0o600)
+        self.assertIn(str(backup), self.stderr)
+        self.assertEqual(len(self.rows('history.csv')), 1)
+        self.assertEqual(self.rows('history.csv')[0]['実行ID'], latest.name)
+
     def test_interrupt_after_record_rename_completes_outputs(self):
         self.assertEqual(self.run_audit(), 0)
         self.input.write_text('new@example.com')
@@ -689,11 +745,15 @@ class AcceptanceTests(unittest.TestCase):
         for name in ('summary.csv','findings.csv','report.html'):
             self.assertEqual((latest/name).read_bytes(), (self.out/name).read_bytes())
         self.assertEqual(self.rows()[0]['email'], 'new@example.com')
+        history = self.rows('history.csv')
+        self.assertEqual([r['アドレス'] for r in history], ['taro@example.com', 'new@example.com'])
+        self.assertEqual(history[-1]['実行ID'], sorted((self.out/'runs').iterdir())[-1].name)
+        self.assertEqual(history[-1]['流出元'], 'New breach')
         self.assertFalse(list(self.out.rglob('.tmp-*')))
 
     def test_interrupt_before_record_rename_keeps_previous_outputs(self):
         self.assertEqual(self.run_audit(), 0)
-        snapshot = {name:(self.out/name).read_bytes() for name in ('summary.csv','findings.csv','report.html')}
+        snapshot = {name:(self.out/name).read_bytes() for name in ('history.csv','summary.csv','findings.csv','report.html')}
         self.input.write_text('new@example.com')
         real_json = audit.json_text
         def interrupt(value):

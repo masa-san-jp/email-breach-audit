@@ -787,7 +787,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
 @page{size:A4 portrait;margin:15mm}@media print{:root{color-scheme:light;--bg:white;--paper:white;--ink:black;--line:#888;--muted:#eee}body{font-size:9pt}main{padding:0;max-width:none}section.addr{padding:10px;break-inside:avoid}th,td{padding:4px}thead{display:table-header-group}tr{break-inside:avoid}h2,h3,h2+p{break-after:avoid}section.addr h3{color:black}a{color:black}table{width:100%}}
 </style></head><body><main>''', '<h1>メールアドレス流出調査レポート</h1>']
     change, new_pairs = comparison or ('前回の記録なし（初回）', set())
-    classifications = {'critical': '即時対応', 'high': '即時対応', 'medium': '順次対応', 'unknown': '順次対応', 'low': '急ぎ不要', 'none': '対応不要'}
+    classifications = CLASSIFICATIONS
     classification_reasons = [
         ('即時対応', '漏れた情報が、今も不正ログインに使える可能性が高い。見つけたその日に手を打つ'),
         ('順次対応', 'パスワードは古い流出だが、使い回していれば今も危険。または、照会できていない照会先がある。即時対応の後に、順に進める'),
@@ -860,9 +860,6 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         parts.append(f'<section class="addr" data-risk="{risk}"><h3>{esc(RISKS[risk]+" "+r["email"])}</h3><p>{esc(reason)}</p>')
         if any((r['email'], f['breach']) in new_pairs for f in findings):
             parts[-1] = parts[-1].replace('</h3>', ' <span class="new">新規</span></h3>')
-        def report_order(f):
-            day = compare_date(f['breach_date'], f['breach_date_precision'])
-            return (f['has_password'] is False, -day.toordinal() if day else math.inf, f['breach'].lower())
         findings = sorted(findings, key=report_order)
         services = '、'.join(f['breach'] for f in findings if risk == 'low' or f['in_scope'] and f['has_password'] is not False) or 'なし（端末の調査を優先）'
         unavailable = '、'.join(NAMES[p] for p in args.providers if states[p] != 'ok')
@@ -890,7 +887,7 @@ def render_html(args, summaries, details, active, cache, notes, current, cutoff,
         for f in findings:
             caution=[flag_labels[flag] for flag in f['flags'].split('; ') if flag]
             if f['catalog_miss']: caution.append('照会先の一覧に詳細なし')
-            password='含む' if f['has_password'] is True else '含まない' if f['has_password'] is False else '含む可能性あり' if f['has_password']=='maybe' else '不明（含むとして扱う）'
+            password=password_label(f['has_password'])
             rows.append([f['breach']+(' 新規' if (r['email'], f['breach']) in new_pairs else ''),
                          (f['breach_date'], f['breach_date_source']),
                          (f['added_date'], f['added_date_source']),('はい' if f['recent'] else 'いいえ') if f['effective_date'] else '日付不明（直近として扱う）','、'.join(DATA_LABELS.get(v,v) for v in f['data_classes'].split('; ') if v) or '不明',password,'、'.join(caution),'、'.join(NAMES[p] for p in f['providers'].split())])
@@ -926,7 +923,40 @@ def utc_text(value):
     return value.astimezone(dt.timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z')
 
 
-def write_outputs(outdir, contents, record_contents, current):
+HISTORY = ['実行日時', '実行ID', '実行の種類', 'アドレス', '区分', '対応の分類',
+           '流出元', '流出日', 'パスワード', '検出した照会先', '照会した照会先']
+CLASSIFICATIONS = {'critical': '即時対応', 'high': '即時対応', 'medium': '順次対応',
+                   'unknown': '順次対応', 'low': '急ぎ不要', 'none': '対応不要'}
+
+
+def report_order(f):
+    day = compare_date(f['breach_date'], f['breach_date_precision'])
+    return (f['has_password'] is False, -day.toordinal() if day else math.inf, f['breach'].lower())
+
+
+def password_label(value):
+    return ('含む' if value is True else '含まない' if value is False else
+            '含む可能性あり' if value == 'maybe' else '不明（含むとして扱う）')
+
+
+def history_rows(args, summaries, details, current, run_id):
+    rows = []
+    for summary in summaries:
+        _, findings, states = details[summary['email']]
+        for finding in sorted(findings, key=report_order) or [None]:
+            values = [current.astimezone().strftime('%Y-%m-%d %H:%M'), run_id,
+                      'キャッシュのみ' if args.report_only else '通常', summary['email'],
+                      RISKS[summary['risk']], CLASSIFICATIONS[summary['risk']],
+                      finding['breach'] if finding else '（なし）',
+                      (finding['breach_date'] or '不明') if finding else '',
+                      password_label(finding['has_password']) if finding else '',
+                      '、'.join(NAMES[p] for p in finding['providers'].split()) if finding else '',
+                      '、'.join(NAMES[p] for p in args.providers if states[p] == 'ok')]
+            rows.append(dict(zip(HISTORY, values)))
+    return rows
+
+
+def write_outputs(outdir, contents, record_contents, current, args, summaries, details):
     paths = []
     record_tmp = None
     interrupted = False
@@ -948,6 +978,20 @@ def write_outputs(outdir, contents, record_contents, current):
         while destination.exists():
             destination = runs / f'{base}-{suffix}'
             suffix += 1
+        history = outdir / 'history.csv'
+        previous = history.read_bytes() if history.exists() else b''
+        incompatible = False
+        if history.exists():
+            with history.open(encoding='utf-8-sig', newline='') as stream:
+                incompatible = next(csv.reader(stream), None) != HISTORY
+        backup = outdir / f'history-{destination.name}.old.csv' if incompatible else None
+        body = csv_text(HISTORY, history_rows(args, summaries, details, current, destination.name))
+        data = body.encode('utf-8-sig') if not previous or incompatible else previous + body.split('\r\n', 1)[1].encode('utf-8')
+        fd, tmp = tempfile.mkstemp(prefix='.history.csv-', dir=outdir)
+        paths.insert(0, (Path(tmp), history))
+        with os.fdopen(fd, 'wb') as stream:
+            stream.write(data)
+        Path(tmp).chmod(0o600)
         # finished_at is sampled immediately before writing the record.
         record_contents['run.json']['finished_at'] = utc_text(now_utc())
         for name, body, encoding in contents + [
@@ -969,6 +1013,11 @@ def write_outputs(outdir, contents, record_contents, current):
                     else:
                         tmp, target = paths[index - 1]
                         if tmp.exists():
+                            if index == 1 and backup is not None and not backup.exists():
+                                os.rename(history, backup)
+                            if index == 1 and backup is not None:
+                                backup.chmod(0o600)
+                                log(f'履歴のヘッダーが違うため、既存のファイルを {backup} に保存しました')
                             os.replace(tmp, target)
                     index += 1
             except KeyboardInterrupt:
@@ -1084,15 +1133,16 @@ def execute(args, current, today):
                    provider_notes={p: '／'.join(notes[p]) for p in args.providers if notes[p]},
                    risk_counts={risk: counts[risk] for risk in RISKS}, partial=partial, exit_code=code)
         output_interrupted, record_path = write_outputs(
-            outdir, contents, {'results.jsonl': '\n'.join(result_lines) + '\n', 'run.json': run}, current)
+            outdir, contents, {'results.jsonl': '\n'.join(result_lines) + '\n', 'run.json': run}, current, args, summaries, details)
         interrupted = output_interrupted or interrupted
-        for name in ('cache.sqlite', 'summary.csv', 'findings.csv', 'report.html'):
+        for name in ('cache.sqlite', 'history.csv', 'summary.csv', 'findings.csv', 'report.html'):
             path = outdir / name
             if path.exists():
                 path.chmod(0o600)
         counts = collections.Counter(r['risk'] for r in summaries)
         partial = sum(r['coverage'] == 'partial' for r in summaries)
         code = 130 if interrupted else 3 if partial else 0
+        log(str(outdir / 'history.csv'))
         log(' ／ '.join(f'{label}: {counts[risk]}' for risk, label in RISKS.items()) + f' ／ 照会できなかった照会先があるアドレス: {partial}')
         for name in ('summary.csv', 'findings.csv', 'report.html'):
             log(str(outdir / name))
