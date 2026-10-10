@@ -442,6 +442,7 @@ API キーはコマンドライン引数では受け取らない（シェルの�
 email-breach-audit/
 ├── SPEC.md                  # この文書（SSOT）
 ├── README.md                # 概要と使い方（詳細はこの文書へリンクし、重複して書かない）
+├── LICENSE                  # MIT
 ├── AGENTS.md                # 実装する人・エージェント向けの作業ルール
 ├── CLAUDE.md                # AGENTS.md を読み込むだけ
 ├── docs/

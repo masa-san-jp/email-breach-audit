@@ -78,6 +78,10 @@ python3 email_breach_audit.py emails.csv
 
 コードと仕様が食い違ったら、正しいのは仕様。
 
+## ライセンス
+
+[MIT](LICENSE)
+
 ## 謝辞
 
 照会先の一つとして [LeakCheck](https://leakcheck.io) の Public API を使う予定。
